@@ -35,43 +35,50 @@ export class AudioPool {
         if (pan < -1) pan = -1;
         if (pan > 1) pan = 1;
 
+        // Cache property lookups (avoids repeated `this.` dereferences in hot path)
+        const gains = this.gains;
+        const panners = this.panners;
+        const sources = this.sources;
+        const expireTimes = this.expireTimes;
+        const cap = this.capacity;
+
         const now = this.ctx.currentTime;
         let bestChannel = -1;
         let oldestTime = Infinity;
 
-        for (let i = 0; i < this.capacity; i++) {
-            if (this.expireTimes[i] <= now) { bestChannel = i; break; }
-            if (this.expireTimes[i] < oldestTime) { oldestTime = this.expireTimes[i]; bestChannel = i; }
+        for (let i = 0; i < cap; i++) {
+            if (expireTimes[i] <= now) { bestChannel = i; break; }
+            if (expireTimes[i] < oldestTime) { oldestTime = expireTimes[i]; bestChannel = i; }
         }
 
-        const gainNode = this.gains[bestChannel];
+        const gainNode = gains[bestChannel];
 
-        if (this.expireTimes[bestChannel] > now) {
+        if (expireTimes[bestChannel] > now) {
             const currentVol = gainNode.gain.value;
             gainNode.gain.cancelScheduledValues(now);
             gainNode.gain.setValueAtTime(currentVol, now);
             gainNode.gain.linearRampToValueAtTime(0.0001, now + 0.02);
-            const oldSource = this.sources[bestChannel];
+            const oldSource = sources[bestChannel];
             if (oldSource) { try { oldSource.stop(now + 0.025); } catch (e) {} }
         }
 
         const source = this.ctx.createBufferSource();
         source.buffer = this.buffer;
         source.playbackRate.value = pitch;
-        source.connect(this.panners[bestChannel]);
+        source.connect(panners[bestChannel]);
 
         const ch = bestChannel;
-        source.onended = () => { this.sources[ch] = null; };
+        source.onended = () => { sources[ch] = null; };
 
-        this.sources[bestChannel] = source;
+        sources[bestChannel] = source;
 
         const startTime = now + 0.025;
         gainNode.gain.cancelScheduledValues(startTime);
         gainNode.gain.setValueAtTime(volume, startTime);
-        this.panners[bestChannel].pan.value = pan;
+        panners[bestChannel].pan.value = pan;
 
         const actualDuration = sprite.duration / pitch;
-        this.expireTimes[bestChannel] = startTime + actualDuration;
+        expireTimes[bestChannel] = startTime + actualDuration;
         source.start(startTime, sprite.start, sprite.duration);
 
         return bestChannel;
