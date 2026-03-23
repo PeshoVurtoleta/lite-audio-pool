@@ -1,0 +1,17 @@
+# @zakkster/lite-audio-pool
+> Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo pan.
+
+## Install
+npm i @zakkster/lite-audio-pool
+
+## Import
+import { AudioPool } from '@zakkster/lite-audio-pool';
+
+## Key Facts
+- Zero GC: All state in TypedArrays, no per-frame allocation
+- Size: < 1.5 KB minified
+- Dependencies: none
+- ESM only (type: module)
+
+## Export: AudioPool (class)
+See source file AudioPool.js for full JSDoc API documentation.
