@@ -100,6 +100,14 @@ export class AudioPool {
     }
 
     stopAll() { for (let i = 0; i < this.capacity; i++) this.stop(i); }
+
+    /** Stop all sounds and release node references. */
+    destroy() {
+        this.stopAll();
+        this.gains = this.panners = this.sources = null;
+        this.expireTimes = null;
+        this.ctx = this.buffer = this.spriteMap = null;
+    }
 }
 
 export default AudioPool;

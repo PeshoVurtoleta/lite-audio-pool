@@ -66,4 +66,12 @@ describe('AudioPool', () => {
         const ch = pool.play('laser', 1.0, 5.0);
         expect(ch).toBeGreaterThanOrEqual(0);
     });
+
+    it('destroy nulls all references', () => {
+        const pool = new AudioPool(ctx, buffer, sprites, 4);
+        pool.destroy();
+        expect(pool.gains).toBeNull();
+        expect(pool.expireTimes).toBeNull();
+        expect(pool.ctx).toBeNull();
+    });
 });

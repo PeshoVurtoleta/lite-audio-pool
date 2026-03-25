@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-audio-pool",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo pan.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
