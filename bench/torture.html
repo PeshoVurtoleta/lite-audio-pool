@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lite-audio-pool - torture bench</title>
+<style>
+  :root {
+    --bg:       #0a0f0a;
+    --panel:    #0f1710;
+    --grid:     #142014;
+    --dim:      #2a4028;
+    --phosphor: #66ff66;
+    --amber:    #ffb84d;
+    --sky:      #7fd7ff;
+    --ink:      #b8e6b8;
+    --font-mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  }
+  @supports (color: oklch(0.9 0.3 145)) {
+    :root {
+      --phosphor: oklch(0.9 0.28 145);
+      --amber:    oklch(0.82 0.18 75);
+      --sky:      oklch(0.85 0.15 235);
+      --ink:      oklch(0.88 0.12 145);
+      --dim:      oklch(0.35 0.12 145);
+      --grid:     oklch(0.22 0.06 145);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    line-height: 1.5;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent 0px,
+      transparent 3px,
+      rgba(102,255,102,0.03) 3px,
+      rgba(102,255,102,0.03) 4px
+    );
+  }
+
+  header { padding-bottom: 0.75rem; border-bottom: 1px solid var(--dim); }
+  h1 { margin: 0 0 0.5rem 0; color: var(--phosphor); font-size: 1rem; letter-spacing: 0.05em; }
+  h1 small { color: var(--dim); font-weight: 400; }
+  header p { margin: 0.25rem 0; color: var(--ink); font-size: 0.8125rem; max-width: 56rem; }
+  header p.note { color: var(--dim); font-size: 0.75rem; }
+  code { background: var(--panel); padding: 0.05rem 0.35rem; border-radius: 2px; color: var(--phosphor); font-size: 0.8125rem; }
+
+  #controls {
+    display: flex;
+    gap: 1rem;
+    align-items: end;
+    padding: 0.75rem;
+    background: var(--panel);
+    border: 1px solid var(--grid);
+    border-radius: 4px;
+    flex-wrap: wrap;
+  }
+  .field { display: flex; flex-direction: column; gap: 0.25rem; }
+  .field label { color: var(--dim); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.15em; }
+  .field input[type=range] { width: 12rem; accent-color: var(--phosphor); }
+  .field output { color: var(--phosphor); font-variant-numeric: tabular-nums; font-size: 1rem; }
+
+  button {
+    background: transparent;
+    color: var(--phosphor);
+    border: 1px solid var(--phosphor);
+    padding: 0.5rem 1.25rem;
+    font-family: inherit;
+    font-size: 0.875rem;
+    cursor: pointer;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+    transition: background 120ms;
+  }
+  @media (hover: hover) { button:hover { background: color-mix(in oklch, var(--phosphor) 15%, transparent); } }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  #panels { display: grid; gap: 1rem; grid-template-columns: 1fr; }
+  @media (min-width: 60rem) { #panels { grid-template-columns: 1fr 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--grid);
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+  }
+  .panel[data-lib=howler]  { border-top: 2px solid var(--sky); }
+  .panel[data-lib=pool]    { border-top: 2px solid var(--phosphor); }
+
+  .panel h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .panel[data-lib=howler] h2 span { color: var(--sky); }
+  .panel[data-lib=pool] h2 span   { color: var(--phosphor); }
+  .panel h2 em { color: var(--dim); font-style: normal; font-weight: 400; font-size: 0.6875rem; letter-spacing: 0.1em; text-transform: uppercase; }
+
+  .scope { width: 100%; height: 5rem; display: block; margin-bottom: 0.75rem; background: var(--bg); border: 1px solid var(--grid); }
+
+  .metrics { display: grid; grid-template-columns: 1fr auto; gap: 0.35rem 1rem; }
+  .metrics dt { color: var(--dim); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.1em; }
+  .metrics dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .panel[data-lib=howler] .metrics dd { color: var(--sky); }
+  .panel[data-lib=pool] .metrics dd   { color: var(--phosphor); }
+  .metrics dd.big { font-size: 1.125rem; }
+
+  #summary {
+    padding: 0.75rem 1rem;
+    background: var(--panel);
+    border: 1px solid var(--grid);
+    border-radius: 4px;
+    color: var(--dim);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+  }
+
+  #enable {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in oklch, var(--bg) 85%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  #enable-inner {
+    text-align: center;
+    padding: 2rem 3rem;
+    border: 1px solid var(--phosphor);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  #enable button { margin-top: 1rem; padding: 0.75rem 2rem; font-size: 1rem; }
+
+  #boot-status {
+    color: var(--dim);
+    font-size: 0.75rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>lite-audio-pool <small>v1.1.0 — torture bench vs Howler.js</small></h1>
+  <p><strong>What this measures:</strong> both libraries dispatch N rapid sprite plays against a real Web Audio backend. Same synthesized sprite content, same sample rate, same target destination. Numbers are the wall-clock time to schedule N plays plus the pace at which sounds are actually reaching the destination during the burst.</p>
+  <p class="note"><strong>Framing:</strong> Howler.js is a general-purpose audio library — it handles decoding, HTML5 Audio fallback for legacy browsers, format detection across MP3/OGG/WAV/etc., spatial audio, and much more that this bench does not exercise. lite-audio-pool is scoped to one narrow slice: pre-wired sprite dispatch with voice stealing for real-time games. The numbers below reflect only that slice. Different tools, different scopes.</p>
+</header>
+
+<div id="controls">
+  <div class="field">
+    <label for="n">plays per run</label>
+    <input id="n" type="range" min="100" max="10000" step="100" value="2000" />
+    <output id="n-out">2000</output>
+  </div>
+  <div class="field">
+    <label for="mode">workload</label>
+    <select id="mode">
+      <option value="rapid">rapid fire (schedule as fast as possible)</option>
+      <option value="steal">steal saturation (fire into a nearly-full pool)</option>
+    </select>
+  </div>
+  <button id="run">RUN BENCH</button>
+  <div id="boot-status">initializing…</div>
+</div>
+
+<div id="panels">
+  <section class="panel" data-lib="howler">
+    <h2><span>Howler.js</span> <em>via CDN, sprite mode</em></h2>
+    <canvas class="scope" id="scope-howler"></canvas>
+    <dl class="metrics">
+      <dt>dispatch time</dt><dd id="h-time" class="big">—</dd>
+      <dt>dispatch rate</dt><dd id="h-rate">—</dd>
+      <dt>plays scheduled</dt><dd id="h-n">—</dd>
+      <dt>version</dt><dd id="h-ver">—</dd>
+    </dl>
+  </section>
+
+  <section class="panel" data-lib="pool">
+    <h2><span>lite-audio-pool</span> <em>local build, capacity 32</em></h2>
+    <canvas class="scope" id="scope-pool"></canvas>
+    <dl class="metrics">
+      <dt>dispatch time</dt><dd id="p-time" class="big">—</dd>
+      <dt>dispatch rate</dt><dd id="p-rate">—</dd>
+      <dt>plays scheduled</dt><dd id="p-n">—</dd>
+      <dt>steals observed</dt><dd id="p-steals">—</dd>
+    </dl>
+  </section>
+</div>
+
+<div id="summary">
+  <strong>Reading the numbers:</strong>
+  <em>Dispatch time</em> is the wall-clock JS time to enqueue N plays into the library. This is the metric a real-time game cares about (frame-budget cost of firing sound effects). It does not include the actual audio rendering, which the browser does off-thread.
+  <em>Dispatch rate</em> is <code>N ÷ dispatch time</code>. Both libraries end up making similar Web Audio API calls under the hood — the difference between them is how much per-play JS work sits above those calls.
+  Voice cap: Howler defaults to 100 concurrent, lite-audio-pool uses 32 here. In steal-saturation mode the pool must fade out an oldest voice on every call; that is the pool's more-expensive path and still where the interesting number sits.
+</div>
+
+<div id="enable">
+  <div id="enable-inner">
+    <div style="color:var(--dim);text-transform:uppercase;letter-spacing:0.15em;font-size:0.6875rem;">audio context suspended</div>
+    <div style="margin-top:0.75rem;">Click to load Howler + generate the sprite atlas.</div>
+    <button id="enable-btn">start</button>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@zakkster/lite-audio-pool": "../AudioPool.js"
+  }
+}
+</script>
+
+<script type="module">
+import { AudioPool } from '@zakkster/lite-audio-pool';
+
+// Load Howler from CDN (dev-time, not shipped with the package).
+const HOWLER_URL = 'https://cdn.jsdelivr.net/npm/howler@2.2.4/dist/howler.min.js';
+const HOWLER_VERSION = '2.2.4';
+
+const $     = (id) => document.getElementById(id);
+const $nIn  = $('n'), $nOut = $('n-out'), $mode = $('mode'), $run = $('run'), $boot = $('boot-status');
+const $enable = $('enable'), $enableBtn = $('enable-btn');
+const $hTime = $('h-time'), $hRate = $('h-rate'), $hN = $('h-n'), $hVer = $('h-ver');
+const $pTime = $('p-time'), $pRate = $('p-rate'), $pN = $('p-n'), $pSteals = $('p-steals');
+const $scopeH = $('scope-howler'), $scopeP = $('scope-pool');
+
+const SPRITE_MAP = {
+    laser: { start: 0.00, duration: 0.15 },
+    hit:   { start: 0.20, duration: 0.10 },
+    boom:  { start: 0.35, duration: 0.40 },
+};
+const CAPACITY = 32;
+
+$nIn.addEventListener('input', () => { $nOut.textContent = $nIn.value; });
+
+// ---------- Sprite atlas (synthesized) ----------------------------------------
+
+async function renderAtlas(sampleRate) {
+    const sr = sampleRate || 44100;
+    const len = Math.ceil(sr * 0.75);
+    const offline = new OfflineAudioContext(1, len, sr);
+
+    // laser
+    const lo = offline.createOscillator(), lg = offline.createGain();
+    lo.frequency.setValueAtTime(1400, 0);
+    lo.frequency.exponentialRampToValueAtTime(140, 0.15);
+    lg.gain.setValueAtTime(0, 0);
+    lg.gain.linearRampToValueAtTime(0.35, 0.005);
+    lg.gain.exponentialRampToValueAtTime(0.001, 0.15);
+    lo.connect(lg); lg.connect(offline.destination);
+    lo.start(0); lo.stop(0.15);
+
+    // hit
+    const ho = offline.createOscillator(); ho.type = 'square';
+    const hg = offline.createGain();
+    ho.frequency.setValueAtTime(520, 0.20);
+    ho.frequency.exponentialRampToValueAtTime(80, 0.30);
+    hg.gain.setValueAtTime(0, 0.20);
+    hg.gain.linearRampToValueAtTime(0.25, 0.205);
+    hg.gain.exponentialRampToValueAtTime(0.001, 0.30);
+    ho.connect(hg); hg.connect(offline.destination);
+    ho.start(0.20); ho.stop(0.30);
+
+    // boom
+    const nl = Math.floor(sr * 0.4);
+    const nb = offline.createBuffer(1, nl, sr);
+    const nd = nb.getChannelData(0);
+    for (let i = 0; i < nl; i++) nd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / nl, 2);
+    const ns = offline.createBufferSource(); ns.buffer = nb;
+    const nf = offline.createBiquadFilter(); nf.type = 'lowpass';
+    nf.frequency.setValueAtTime(2200, 0.35);
+    nf.frequency.exponentialRampToValueAtTime(180, 0.75);
+    const ng = offline.createGain();
+    ng.gain.setValueAtTime(0.5, 0.35);
+    ns.connect(nf); nf.connect(ng); ng.connect(offline.destination);
+    ns.start(0.35);
+
+    return await offline.startRendering();
+}
+
+// ---------- WAV encoder (for Howler, which needs a URL) ----------------------
+
+function audioBufferToWavBlob(buf) {
+    const numCh = 1;
+    const sr = buf.sampleRate;
+    const nFrames = buf.length;
+    const bytesPerSample = 2;
+    const dataSize = nFrames * numCh * bytesPerSample;
+    const bufferSize = 44 + dataSize;
+
+    const wav = new ArrayBuffer(bufferSize);
+    const v = new DataView(wav);
+    let o = 0;
+    const wStr = (s) => { for (let i = 0; i < s.length; i++) v.setUint8(o++, s.charCodeAt(i)); };
+    const w16 = (n) => { v.setUint16(o, n, true); o += 2; };
+    const w32 = (n) => { v.setUint32(o, n, true); o += 4; };
+
+    wStr('RIFF'); w32(bufferSize - 8); wStr('WAVE');
+    wStr('fmt '); w32(16); w16(1); w16(numCh); w32(sr); w32(sr * numCh * bytesPerSample); w16(numCh * bytesPerSample); w16(16);
+    wStr('data'); w32(dataSize);
+
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < nFrames; i++) {
+        const s = Math.max(-1, Math.min(1, ch[i]));
+        v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        o += 2;
+    }
+    return new Blob([wav], { type: 'audio/wav' });
+}
+
+// ---------- Load howler dynamically ------------------------------------------
+
+function loadHowler() {
+    return new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = HOWLER_URL;
+        s.onload = () => res();
+        s.onerror = () => rej(new Error('Failed to load Howler from CDN'));
+        document.head.appendChild(s);
+    });
+}
+
+// ---------- State ------------------------------------------------------------
+
+let ctx, atlas, wavUrl;
+let pool, howl;
+let analyserH, analyserP;
+let waveH, waveP;
+let scopeCtxH, scopeCtxP;
+let running = false;
+let ready = false;
+
+// ---------- Start ------------------------------------------------------------
+
+async function start() {
+    // Load Howler FIRST. Howler creates its own AudioContext on library init;
+    // we adopt that context for everything (pool, analysers, atlas) so all
+    // nodes live in the same graph. Cross-context .connect() throws.
+    $boot.textContent = 'loading Howler from CDN…';
+    await loadHowler();
+
+    // window.Howler is the manager; window.Howl is the constructor. Two separate globals.
+    const H = window.Howler;
+    const HowlCtor = window.Howl;
+    if (!H)        throw new Error('window.Howler not present after script load');
+    if (!HowlCtor) throw new Error('window.Howl constructor not present after script load');
+
+    // In some browsers Howler defers ctx creation. Nudge it if needed.
+    if (!H.ctx) {
+        try { H.volume(H.volume()); } catch (e) {}
+    }
+    if (!H.ctx) {
+        throw new Error('Howler did not create an AudioContext. Autoplay policy may block the page - try clicking again.');
+    }
+
+    ctx = H.ctx;
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    $boot.textContent = 'rendering sprite atlas offline…';
+    // Match the shared ctx sample rate so the AudioBuffer plays without resampling
+    atlas = await renderAtlas(ctx.sampleRate);
+
+    $boot.textContent = 'encoding WAV for Howler…';
+    const blob = audioBufferToWavBlob(atlas);
+    wavUrl = URL.createObjectURL(blob);
+
+    $boot.textContent = 'wiring analyser taps…';
+    analyserH = ctx.createAnalyser(); analyserH.fftSize = 1024;
+    analyserP = ctx.createAnalyser(); analyserP.fftSize = 1024;
+    waveH = new Uint8Array(analyserH.fftSize);
+    waveP = new Uint8Array(analyserP.fftSize);
+
+    // Pool: inline analyser (taps AND passes audio through to destination).
+    const poolBus = ctx.createGain();
+    poolBus.connect(analyserP);
+    analyserP.connect(ctx.destination);
+    pool = new AudioPool(ctx, atlas, SPRITE_MAP, CAPACITY, poolBus);
+
+    // Howler: parallel tap. masterGain -> destination stays untouched; we add
+    // a second edge masterGain -> analyserH that intentionally does NOT connect
+    // to destination. Analyser reads its input signal regardless of whether its
+    // output is connected, so this is a pure inspection tap - no double-audio,
+    // no disconnect() gymnastics, no cross-graph fragility.
+    H.masterGain.connect(analyserH);
+
+    howl = new HowlCtor({
+        src: [wavUrl],
+        format: ['wav'],
+        sprite: {
+            laser: [0,   150],
+            hit:   [200, 100],
+            boom:  [350, 400],
+        },
+    });
+
+    await new Promise((res, rej) => {
+        if (howl.state() === 'loaded') return res();
+        howl.once('load', () => res());
+        howl.once('loaderror', (_id, err) => {
+            rej(new Error('Howler failed to load the WAV: ' + (err || 'unknown')));
+        });
+    });
+
+    scopeCtxH = $scopeH.getContext('2d');
+    scopeCtxP = $scopeP.getContext('2d');
+    resizeScopes();
+    window.addEventListener('resize', resizeScopes);
+
+    $hVer.textContent = HOWLER_VERSION;
+    $boot.textContent = 'ready · shared ctx @ ' + ctx.sampleRate + ' Hz';
+    ready = true;
+    $run.disabled = false;
+    requestAnimationFrame(drawFrame);
+}
+
+function resizeScopes() {
+    for (const [c, cv] of [[scopeCtxH, $scopeH], [scopeCtxP, $scopeP]]) {
+        const dpr = window.devicePixelRatio || 1;
+        const r = cv.getBoundingClientRect();
+        cv.width = Math.round(r.width * dpr);
+        cv.height = Math.round(r.height * dpr);
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+}
+
+// ---------- Draw --------------------------------------------------------------
+
+const PHOSPHOR = getComputedStyle(document.documentElement).getPropertyValue('--phosphor').trim() || '#66ff66';
+const SKY      = getComputedStyle(document.documentElement).getPropertyValue('--sky').trim()      || '#7fd7ff';
+
+function drawWave(cv, cctx, data, color) {
+    const w = cv.clientWidth, h = cv.clientHeight;
+    const n = data.length;
+    const stride = Math.max(1, (n / w) | 0);
+    const xStep = (w * stride) / n;
+
+    cctx.clearRect(0, 0, w, h);
+    cctx.strokeStyle = color;
+
+    // Build path once
+    cctx.beginPath();
+    let x = 0;
+    for (let i = 0; i < n; i += stride) {
+        const y = ((data[i] - 128) / 128) * (h * 0.42) + h * 0.5;
+        if (i === 0) cctx.moveTo(x, y);
+        else cctx.lineTo(x, y);
+        x += xStep;
+    }
+    // Glow undercoat then sharp top: cheaper on old GPUs than native shadowBlur
+    cctx.globalAlpha = 0.3;
+    cctx.lineWidth = 3;
+    cctx.stroke();
+    cctx.globalAlpha = 1;
+    cctx.lineWidth = 1;
+    cctx.stroke();
+}
+
+function drawFrame() {
+    if (!ready) return;
+    analyserH.getByteTimeDomainData(waveH);
+    analyserP.getByteTimeDomainData(waveP);
+    drawWave($scopeH, scopeCtxH, waveH, SKY);
+    drawWave($scopeP, scopeCtxP, waveP, PHOSPHOR);
+    requestAnimationFrame(drawFrame);
+}
+
+// ---------- Run bench --------------------------------------------------------
+
+function runHowler(N, mode) {
+    const t0 = performance.now();
+    if (mode === 'steal') {
+        // Pre-fill: play 100 (Howler's default cap) to force new plays to spawn.
+        for (let i = 0; i < 100; i++) howl.play('laser');
+    }
+    for (let i = 0; i < N; i++) howl.play('laser');
+    return performance.now() - t0;
+}
+
+function runPool(N, mode) {
+    let steals = 0;
+    const now = () => ctx.currentTime;
+    const t0 = performance.now();
+
+    if (mode === 'steal') {
+        // Pre-fill capacity so every subsequent play must steal.
+        for (let i = 0; i < CAPACITY; i++) pool.play('laser');
+    }
+
+    for (let i = 0; i < N; i++) {
+        // Observe steals for the metric; the check itself is not part of dispatch.
+        let allBusy = true;
+        const t = now();
+        for (let c = 0; c < CAPACITY; c++) {
+            if (pool.expireTimes[c] <= t) { allBusy = false; break; }
+        }
+        if (allBusy) steals++;
+        pool.play('laser');
+    }
+
+    const dt = performance.now() - t0;
+    return { dt, steals };
+}
+
+async function runBench() {
+    if (!ready || running) return;
+    running = true;
+    $run.disabled = true;
+    $run.textContent = 'running…';
+    const N = Number($nIn.value);
+    const mode = $mode.value;
+
+    // Order: pool first, then howler. Give each a moment for GC to settle in between.
+    await new Promise(r => setTimeout(r, 100));
+    const pRes = runPool(N, mode);
+    $pTime.textContent = pRes.dt.toFixed(1) + ' ms';
+    $pRate.textContent = Math.round((N / pRes.dt) * 1000).toLocaleString() + ' plays/s';
+    $pN.textContent    = N.toLocaleString();
+    $pSteals.textContent = pRes.steals.toLocaleString();
+
+    await new Promise(r => setTimeout(r, 500));
+    const hDt = runHowler(N, mode);
+    $hTime.textContent = hDt.toFixed(1) + ' ms';
+    $hRate.textContent = Math.round((N / hDt) * 1000).toLocaleString() + ' plays/s';
+    $hN.textContent    = N.toLocaleString();
+
+    $run.disabled = false;
+    $run.textContent = 'RUN BENCH';
+    running = false;
+}
+
+// ---------- Wire up ----------------------------------------------------------
+
+$enableBtn.addEventListener('click', async () => {
+    $enableBtn.disabled = true;
+    $enableBtn.textContent = 'starting…';
+    try {
+        await start();
+        $enable.remove();
+    } catch (e) {
+        $enableBtn.textContent = 'failed - see console';
+        $boot.textContent = 'boot failed: ' + e.message;
+        console.error(e);
+    }
+});
+$run.disabled = true;
+$run.addEventListener('click', runBench);
+</script>
+
+</body>
+</html>

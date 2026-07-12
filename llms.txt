@@ -1,0 +1,58 @@
+# @zakkster/lite-audio-pool
+> Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo pan, bus routing, ABA-safe handles.
+
+## Install
+npm i @zakkster/lite-audio-pool
+
+## Import
+import { AudioPool } from '@zakkster/lite-audio-pool';
+
+## Key Facts
+- Zero GC on the hot path: all state in TypedArrays, `onended` handler bound once per pool (not per play)
+- Size: ~2 KB minified, < 1 KB gzipped
+- Dependencies: none
+- ESM only (type: module)
+- Voice stealing with 20 ms anti-pop fade
+- Generation-stamped handles: `play()` returns `((gen << 8) | channel) >>> 0`, stale handles are silent no-ops on `stop()`
+- Bus routing via constructor `output` param
+- Per-play buffer override via `play()` 5th arg
+- Constructor validates capacity and sprite table; typos fail at wiring, not at first shot
+- `expireTimes` are f64 - stays precise at 24h+ of AudioContext uptime
+
+## Export: AudioPool (class)
+
+### Constructor
+```
+new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?)
+```
+- `ctx: AudioContext` (required)
+- `audioBuffer: AudioBuffer` - default decoded sprite file
+- `spriteMap: Record<string, { start: number, duration: number }>` (required; validated)
+- `capacity?: number` - integer in [1, 256], defaults to 32. Out-of-range throws `RangeError`.
+- `output?: AudioNode | null` - defaults to `ctx.destination`. Pass a GainNode to route into a bus.
+
+Throws `TypeError` on missing ctx/spriteMap or malformed sprites. Throws `RangeError` on invalid capacity.
+
+### play(spriteId, volume?, pan?, pitch?, buffer?)
+Returns a packed handle `((gen << 8) | channel) >>> 0`, or `-1` if spriteId is unknown.
+- Pass handle to `stop()` for ABA-safe stopping.
+- First play on a virgin channel: gen=0, handle equals channel index (backwards-compatible for opaque usage).
+- `buffer?: AudioBuffer | null` - optional per-play buffer override.
+- Pan is scheduled at start-time so a stolen voice keeps its pan through its fade-out.
+
+### stop(handle)
+Stops the specific play. Stale handles (channel stolen or already ended) are silent no-ops.
+
+### isPlaying(handle)
+Returns `true` iff the handle still names a sounding voice. Same test `stop()` runs internally.
+
+### activeCount()
+Returns the number of currently sounding voices (0..capacity). Allocation-free.
+
+### stopAll()
+Stops every active channel, invalidates all previously issued handles.
+
+### destroy()
+Stops all sounds, disconnects every node the pool built, releases references. Idempotent.
+
+See source file AudioPool.js for full JSDoc and inline comments.

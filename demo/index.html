@@ -1,0 +1,2586 @@
+<!doctype html>
+<!-- @zakkster/lite-audio-pool - demo. (c) Zahary Shinikchiev. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>lite-audio-pool - oscilloscope</title>
+    <style>
+        :root {
+            --bg: #070b07;
+            --bg: oklch(0.16 0.02 145);
+            --panel: #0d140e;
+            --panel: oklch(0.20 0.025 145);
+            --panel-in: #0a100b;
+            --panel-in: oklch(0.18 0.02 145);
+            --grid: #16221a;
+            --grid: oklch(0.26 0.04 145);
+            --dim: #3f5f42;
+            --dim: oklch(0.48 0.08 145);
+            --ink: #b8e6b8;
+            --ink: oklch(0.86 0.10 145);
+            --phosphor: #66ff66;
+            --phosphor: oklch(0.90 0.28 145);
+            --amber: #ffb84d;
+            --amber: oklch(0.83 0.17 75);
+            --hot: #ff5252;
+            --hot: oklch(0.68 0.24 25);
+            --scan: rgba(102, 255, 102, 0.028);
+
+            --font-mono: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', Menlo, Consolas, monospace;
+            --hair: 1px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            color-scheme: dark;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100dvh;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            background-color: var(--bg);
+            background-image: repeating-linear-gradient(0deg, transparent 0 3px, var(--scan) 3px 4px),
+            radial-gradient(ellipse at 50% 40%, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+            color: var(--ink);
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            line-height: 1.45;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ---- Header + tabs -------------------------------------------------- */
+        header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem 1.5rem;
+            flex-wrap: wrap;
+            padding-bottom: 0.625rem;
+            border-bottom: var(--hair) solid var(--grid);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            color: var(--phosphor);
+            text-shadow: 0 0 0.75rem color-mix(in oklch, var(--phosphor) 45%, transparent);
+        }
+
+        h1 span {
+            color: var(--dim);
+            font-weight: 400;
+            letter-spacing: 0.04em;
+        }
+
+        header p {
+            margin: 0.25rem 0 0;
+            color: var(--dim);
+            max-width: 46rem;
+            font-size: 0.75rem;
+        }
+
+        #ctx-badge {
+            color: var(--dim);
+            font-size: 0.6875rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        #ctx-badge b {
+            color: var(--amber);
+            font-weight: 500;
+        }
+
+        #tabs {
+            display: flex;
+            gap: 0.375rem;
+            flex-wrap: wrap;
+        }
+
+        #tabs button {
+            min-width: 7.5rem;
+        }
+
+        /* ---- Panels ---------------------------------------------------------- */
+        .deck {
+            display: grid;
+            gap: 0.75rem;
+            grid-template-columns: minmax(0, 1fr);
+            flex: 1;
+            min-height: 0;
+        }
+
+        .deck[hidden] {
+            display: none;
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            gap: 0.5rem;
+            padding: 0.625rem 0.75rem 0.75rem;
+            background: var(--panel);
+            border: var(--hair) solid var(--grid);
+            border-radius: 3px;
+            box-shadow: inset 0 0 2rem rgba(0, 0, 0, 0.45);
+        }
+
+        .panel-title {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            color: var(--dim);
+            font-size: 0.625rem;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+        }
+
+        .panel-title b {
+            color: var(--phosphor);
+            font-weight: 500;
+            letter-spacing: 0.1em;
+        }
+
+        .note {
+            color: var(--dim);
+            font-size: 0.6875rem;
+            margin: 0;
+        }
+
+        .note em {
+            color: var(--ink);
+            font-style: normal;
+        }
+
+        .screen {
+            position: relative;
+            flex: 1;
+            min-height: 4rem;
+            background: var(--panel-in);
+            border: var(--hair) solid var(--grid);
+            border-radius: 2px;
+        }
+
+        .screen canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+        }
+
+        /* ---- Controls -------------------------------------------------------- */
+        button {
+            background: transparent;
+            color: var(--ink);
+            border: var(--hair) solid var(--dim);
+            border-radius: 2px;
+            padding: 0.375rem 0.625rem;
+            font: inherit;
+            font-size: 0.75rem;
+            letter-spacing: 0.06em;
+            cursor: pointer;
+            transition: color 120ms, border-color 120ms, background-color 120ms;
+        }
+
+        @media (hover: hover) {
+            button:hover:not(:disabled) {
+                color: var(--phosphor);
+                border-color: var(--phosphor);
+            }
+        }
+
+        button:is(.on) {
+            color: var(--phosphor);
+            border-color: var(--phosphor);
+            background: color-mix(in oklch, var(--phosphor) 10%, transparent);
+        }
+
+        button:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        :is(button, input, a):focus-visible {
+            outline: 2px solid var(--phosphor);
+            outline-offset: 2px;
+        }
+
+        .row {
+            display: flex;
+            gap: 0.375rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .row > .lbl {
+            flex: 0 0 100%;
+            color: var(--dim);
+            font-size: 0.625rem;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+        }
+
+        .slider {
+            display: grid;
+            grid-template-columns: 4.5rem 1fr 3.5rem;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .slider label {
+            color: var(--dim);
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .slider output {
+            color: var(--phosphor);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-size: 0.75rem;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 1.25rem;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            height: 2px;
+            background: var(--grid);
+            border-radius: 1px;
+        }
+
+        input[type="range"]::-moz-range-track {
+            height: 2px;
+            background: var(--grid);
+            border-radius: 1px;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 0.625rem;
+            height: 1rem;
+            margin-top: -0.4375rem;
+            border-radius: 1px;
+            background: var(--phosphor);
+            box-shadow: 0 0 0.5rem color-mix(in oklch, var(--phosphor) 60%, transparent);
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 0.625rem;
+            height: 1rem;
+            border: 0;
+            border-radius: 1px;
+            background: var(--phosphor);
+        }
+
+        #fire {
+            padding: 0.75rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            color: var(--amber);
+            border-color: var(--amber);
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #fire.on {
+            background: color-mix(in oklch, var(--amber) 18%, transparent);
+            color: var(--amber);
+            border-color: var(--amber);
+        }
+
+        /* ---- Readouts -------------------------------------------------------- */
+        dl.readout {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.1875rem 1rem;
+            margin: 0;
+            align-content: start;
+        }
+
+        dl.readout dt {
+            color: var(--dim);
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        dl.readout dd {
+            margin: 0;
+            text-align: right;
+            color: var(--phosphor);
+            font-variant-numeric: tabular-nums;
+        }
+
+        dl.readout dd.warn {
+            color: var(--hot);
+        }
+
+        /* ---- Handle table ---------------------------------------------------- */
+        #handles {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .hrow {
+            display: grid;
+            grid-template-columns: 6.5rem 3rem 3rem 1fr auto;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.3125rem 0.5rem;
+            border: var(--hair) solid var(--grid);
+            border-radius: 2px;
+            background: var(--panel-in);
+            font-size: 0.75rem;
+        }
+
+        .hrow[hidden] {
+            display: none;
+        }
+
+        .hrow code {
+            color: var(--ink);
+            letter-spacing: 0.02em;
+        }
+
+        .hrow .meta {
+            color: var(--dim);
+            font-size: 0.6875rem;
+        }
+
+        .hrow .st {
+            letter-spacing: 0.1em;
+            font-size: 0.6875rem;
+        }
+
+        .hrow:is(.live) .st {
+            color: var(--phosphor);
+        }
+
+        .hrow:is(.ended) .st {
+            color: var(--dim);
+        }
+
+        .hrow:is(.stolen) .st {
+            color: var(--hot);
+        }
+
+        .hrow:is(.stopped) .st {
+            color: var(--amber);
+        }
+
+        .hrow:is(.stolen) {
+            border-color: color-mix(in oklch, var(--hot) 40%, var(--grid));
+        }
+
+        .hrow button {
+            padding: 0.1875rem 0.5rem;
+            font-size: 0.6875rem;
+        }
+
+        #steal-hint {
+            min-height: 2.5rem;
+        }
+
+        /* ---- Rack + log ------------------------------------------------------ */
+        .rack {
+            display: grid;
+            gap: 0.75rem;
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        #log {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            font-size: 0.6875rem;
+        }
+
+        .lrow {
+            display: grid;
+            grid-template-columns: 4.5rem 4.25rem 1fr;
+            gap: 0.5rem;
+            padding: 0.0625rem 0.25rem;
+            color: var(--dim);
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .lrow .tag {
+            letter-spacing: 0.1em;
+        }
+
+        .lrow:is(.play) .tag {
+            color: var(--phosphor);
+        }
+
+        .lrow:is(.steal) .tag {
+            color: var(--hot);
+        }
+
+        .lrow:is(.stop) .tag {
+            color: var(--amber);
+        }
+
+        .lrow:is(.noop) .tag {
+            color: var(--amber);
+        }
+
+        .lrow:is(.sys) .tag {
+            color: var(--dim);
+        }
+
+        .lrow .msg {
+            color: var(--ink);
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .lrow:is(.noop) .msg {
+            color: var(--amber);
+        }
+
+        /* ---- Enable gate ----------------------------------------------------- */
+        #gate {
+            position: fixed;
+            inset: 0;
+            z-index: 10;
+            display: grid;
+            place-items: center;
+            padding: 1rem;
+            background: color-mix(in oklch, var(--bg) 88%, transparent);
+            backdrop-filter: blur(2px);
+        }
+
+        #gate[hidden] {
+            display: none;
+        }
+
+        #gate-inner {
+            max-width: 26rem;
+            padding: 1.75rem;
+            text-align: center;
+            background: var(--panel);
+            border: var(--hair) solid var(--phosphor);
+            border-radius: 4px;
+            box-shadow: 0 0 3rem color-mix(in oklch, var(--phosphor) 12%, transparent);
+        }
+
+        #gate p {
+            color: var(--dim);
+            font-size: 0.75rem;
+        }
+
+        #gate button {
+            margin-top: 0.75rem;
+            padding: 0.625rem 1.75rem;
+            font-size: 0.875rem;
+            color: var(--phosphor);
+            border-color: var(--phosphor);
+        }
+
+        /* ---- Wide layout ----------------------------------------------------- */
+        @media (min-width: 62rem) {
+            #deck-scope {
+                grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+                grid-template-rows: minmax(11rem, 1fr) 6.5rem 6rem;
+                grid-template-areas:
+        "scope  controls"
+        "spec   controls"
+        "atlas  telem";
+            }
+
+            #p-scope {
+                grid-area: scope;
+            }
+
+            #p-spec {
+                grid-area: spec;
+            }
+
+            #p-atlas {
+                grid-area: atlas;
+            }
+
+            #p-controls {
+                grid-area: controls;
+            }
+
+            #p-telem {
+                grid-area: telem;
+            }
+
+            #deck-steal {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                grid-template-rows: minmax(12rem, 1fr) auto;
+                grid-template-areas:
+        "matrix handles"
+        "sctl   handles";
+            }
+
+            #p-steal-matrix {
+                grid-area: matrix;
+            }
+
+            #p-steal-ctl {
+                grid-area: sctl;
+            }
+
+            #p-handles {
+                grid-area: handles;
+            }
+
+            #deck-field {
+                grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+                grid-template-rows: minmax(14rem, 1fr) 8rem;
+                grid-template-areas:
+        "pad  fctl"
+        "pad  meter";
+            }
+
+            #p-pad {
+                grid-area: pad;
+            }
+
+            #p-field-ctl {
+                grid-area: fctl;
+            }
+
+            #p-meter {
+                grid-area: meter;
+            }
+
+            #deck-stress {
+                grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+                grid-template-rows: minmax(9rem, 1fr) minmax(9rem, 1fr);
+                grid-template-areas:
+        "spark  xctl"
+        "matrix stats";
+            }
+
+            #p-spark {
+                grid-area: spark;
+            }
+
+            #p-stress-matrix {
+                grid-area: matrix;
+            }
+
+            #p-stress-ctl {
+                grid-area: xctl;
+            }
+
+            #p-stress-stats {
+                grid-area: stats;
+            }
+
+            .rack {
+                grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                transition: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>lite-audio-pool <span>/ v1.1.0 / zero-GC sprite pool</span></h1>
+        <p>One decoded atlas, one pool, N channels. Fire sprites at it and watch what the pool actually does: which
+            channel it picks, when it steals a voice, and why an old handle can never kill the sound that replaced
+            it.</p>
+    </div>
+    <div id="ctx-badge">ctx <b id="ctx-state">closed</b> / <b id="ctx-sr">-</b> / t <b id="ctx-time">0.00</b>s</div>
+</header>
+
+<nav id="tabs" aria-label="scenes">
+    <button data-scene="0" class="on" aria-pressed="true">1 / scope</button>
+    <button data-scene="1" aria-pressed="false">2 / steal</button>
+    <button data-scene="2" aria-pressed="false">3 / field</button>
+    <button data-scene="3" aria-pressed="false">4 / stress</button>
+</nav>
+
+<!-- ============================ SCENE 0: SCOPE ============================ -->
+<main id="deck-scope" class="deck">
+
+    <section id="p-scope" class="panel">
+        <div class="panel-title"><span>scope / analyser 2048 / rising-edge trigger</span><b id="hud-voices">0 voices</b>
+        </div>
+        <div class="screen">
+            <canvas id="cv-scope"></canvas>
+        </div>
+    </section>
+
+    <section id="p-spec" class="panel">
+        <div class="panel-title"><span>spectrum / 48 log bins / peak hold</span></div>
+        <div class="screen">
+            <canvas id="cv-spec"></canvas>
+        </div>
+    </section>
+
+    <section id="p-atlas" class="panel">
+        <div class="panel-title"><span>atlas map / one buffer, six sprites</span><b>click a region to play it</b></div>
+        <div class="screen">
+            <canvas id="cv-atlas"></canvas>
+        </div>
+    </section>
+
+    <section id="p-controls" class="panel">
+        <div class="panel-title"><span>controls</span><b>keys 1-6, space, esc</b></div>
+        <div class="row" id="sprites">
+            <span class="lbl">sprite</span>
+            <button data-sprite="0" class="on" aria-pressed="true">laser</button>
+            <button data-sprite="1" aria-pressed="false">hit</button>
+            <button data-sprite="2" aria-pressed="false">coin</button>
+            <button data-sprite="3" aria-pressed="false">blip</button>
+            <button data-sprite="4" aria-pressed="false">boom</button>
+            <button data-sprite="5" aria-pressed="false">drone</button>
+        </div>
+        <div class="slider">
+            <label for="s-vol">volume</label>
+            <input id="s-vol" type="range" min="0" max="100" value="70"/>
+            <output id="o-vol">0.70</output>
+        </div>
+        <div class="slider">
+            <label for="s-pan">pan</label>
+            <input id="s-pan" type="range" min="-100" max="100" value="0"/>
+            <output id="o-pan">0.00</output>
+        </div>
+        <div class="slider">
+            <label for="s-pitch">pitch</label>
+            <input id="s-pitch" type="range" min="50" max="200" value="100"/>
+            <output id="o-pitch">1.00</output>
+        </div>
+        <div class="slider">
+            <label for="s-rate">hold rate</label>
+            <input id="s-rate" type="range" min="1" max="60" value="20"/>
+            <output id="o-rate">20/s</output>
+        </div>
+        <div class="row">
+            <button id="b-jitter" class="on" aria-pressed="true">jitter pan + pitch</button>
+            <button id="b-stopall">stop all</button>
+        </div>
+        <button id="fire">FIRE / hold to repeat</button>
+        <p class="note">Jitter adds +/-0.5 pan and +/-15% pitch per play, so a 20/s stream never sounds like a loop. The
+            pool sees identical calls either way.</p>
+    </section>
+
+    <section id="p-telem" class="panel">
+        <div class="panel-title"><span>telemetry</span></div>
+        <dl class="readout">
+            <dt>plays</dt>
+            <dd id="t-plays">0</dd>
+            <dt>active voices</dt>
+            <dd id="t-active">0 / 32</dd>
+            <dt>steals</dt>
+            <dd id="t-steals">0</dd>
+            <dt>rate</dt>
+            <dd id="t-rate">0/s</dd>
+        </dl>
+    </section>
+
+</main>
+
+<!-- ============================ SCENE 1: STEAL ============================ -->
+<main id="deck-steal" class="deck" hidden>
+
+    <section id="p-steal-matrix" class="panel">
+        <div class="panel-title"><span>voice matrix / dedicated pool</span><b id="steal-cap-label">4 channels</b></div>
+        <div class="screen">
+            <canvas id="cv-mat-steal"></canvas>
+        </div>
+    </section>
+
+    <section id="p-steal-ctl" class="panel">
+        <div class="panel-title"><span>overrun</span></div>
+        <div class="row">
+            <span class="lbl">capacity</span>
+            <button data-cap="2" aria-pressed="false">2</button>
+            <button data-cap="4" class="on" aria-pressed="true">4</button>
+            <button data-cap="8" aria-pressed="false">8</button>
+            <button data-cap="16" aria-pressed="false">16</button>
+        </div>
+        <div class="row">
+            <button id="b-drone">play drone (2.0s)</button>
+            <button id="b-overrun">overrun: fire cap + 2</button>
+            <button id="b-steal-stopall">stop all</button>
+        </div>
+        <p class="note">A 2 second sprite into a small pool guarantees exhaustion. Every play returns <em>((gen &lt;&lt;
+            8) | ch) &gt;&gt;&gt; 0</em>: the channel it landed on, stamped with that channel's generation counter.</p>
+        <p class="note" id="steal-hint">Fill the pool, then press stop on a <em>stolen</em> row. The channel keeps
+            playing: the generation moved on, so the old handle addresses a voice that no longer exists.</p>
+    </section>
+
+    <section id="p-handles" class="panel">
+        <div class="panel-title"><span>handles issued</span><b>newest first</b></div>
+        <div id="handles"></div>
+        <p class="note">LIVE = gen matches and the voice is still sounding. STOLEN = the channel was recycled under it.
+            ENDED = it played out. Calling <em>stop()</em> on anything but LIVE is a guarded no-op, never a mis-fire.
+        </p>
+    </section>
+
+</main>
+
+<!-- ============================ SCENE 2: FIELD ============================ -->
+<main id="deck-field" class="deck" hidden>
+
+    <section id="p-pad" class="panel">
+        <div class="panel-title"><span>field / x = pan, y = pitch</span><b>drag to fire</b></div>
+        <div class="screen">
+            <canvas id="cv-pad"></canvas>
+        </div>
+    </section>
+
+    <section id="p-field-ctl" class="panel">
+        <div class="panel-title"><span>bus routing</span><b>pool -&gt; output node</b></div>
+        <div class="row" id="routes">
+            <span class="lbl">route</span>
+            <button data-route="0" class="on" aria-pressed="true">direct</button>
+            <button data-route="1" aria-pressed="false">lowpass</button>
+            <button data-route="2" aria-pressed="false">space</button>
+        </div>
+        <div class="slider">
+            <label for="s-cut">cutoff</label>
+            <input id="s-cut" type="range" min="0" max="100" value="70"/>
+            <output id="o-cut">4200</output>
+        </div>
+        <div class="slider">
+            <label for="s-wet">wet</label>
+            <input id="s-wet" type="range" min="0" max="100" value="45"/>
+            <output id="o-wet">0.45</output>
+        </div>
+        <div class="slider">
+            <label for="s-drag">drag rate</label>
+            <input id="s-drag" type="range" min="0" max="30" value="12"/>
+            <output id="o-drag">12/s</output>
+        </div>
+        <p class="note">The pool was constructed with an <em>output</em> node, not <em>ctx.destination</em>. Rewiring
+            that one bus moves all 32 voices at once: the pool never learns about it.</p>
+    </section>
+
+    <section id="p-meter" class="panel">
+        <div class="panel-title"><span>stereo bus / rms + peak hold</span></div>
+        <div class="screen">
+            <canvas id="cv-meter"></canvas>
+        </div>
+    </section>
+
+</main>
+
+<!-- ============================ SCENE 3: STRESS =========================== -->
+<main id="deck-stress" class="deck" hidden>
+
+    <section id="p-spark" class="panel">
+        <div class="panel-title"><span>frame time / 256 frame ring / 16.7ms budget</span><b id="hud-fps">0 fps</b></div>
+        <div class="screen">
+            <canvas id="cv-spark"></canvas>
+        </div>
+    </section>
+
+    <section id="p-stress-matrix" class="panel">
+        <div class="panel-title"><span>voice matrix / 32 channels</span></div>
+        <div class="screen">
+            <canvas id="cv-mat-main"></canvas>
+        </div>
+    </section>
+
+    <section id="p-stress-ctl" class="panel">
+        <div class="panel-title"><span>firehose</span></div>
+        <div class="slider">
+            <label for="s-stress">rate</label>
+            <input id="s-stress" type="range" min="0" max="600" step="10" value="120"/>
+            <output id="o-stress">120/s</output>
+        </div>
+        <div class="row">
+            <button id="b-stress">run</button>
+            <button id="b-stress-reset">reset counters</button>
+        </div>
+        <p class="note">Sustained fire at 600/s means 600 <em>AudioBufferSourceNode</em>s per second. Sources are
+            one-shot by spec, so that allocation is unavoidable. What the pool avoids is the rest: gains and panners are
+            built once at construction, and channel state lives in <em>Float64Array</em> / <em>Uint32Array</em> slots
+            that never grow.</p>
+    </section>
+
+    <section id="p-stress-stats" class="panel">
+        <div class="panel-title"><span>stats</span></div>
+        <dl class="readout">
+            <dt>frame avg</dt>
+            <dd id="t-favg">0.0 ms</dd>
+            <dt>frame worst</dt>
+            <dd id="t-fmax">0.0 ms</dd>
+            <dt>plays/s</dt>
+            <dd id="t-pps">0</dd>
+            <dt>steals/s</dt>
+            <dd id="t-sps">0</dd>
+            <dt>active voices</dt>
+            <dd id="t-sactive">0 / 32</dd>
+            <dt>js heap</dt>
+            <dd id="t-heap">n/a</dd>
+        </dl>
+        <p class="note">Heap is Chrome-only and coarse. Read the slope, not the number: a flat-ish line under a firehose
+            is the claim being tested.</p>
+    </section>
+
+</main>
+
+<!-- ============================ RACK ====================================== -->
+<div class="rack">
+    <section class="panel">
+        <div class="panel-title"><span>master bus</span></div>
+        <div class="slider">
+            <label for="s-master">master</label>
+            <input id="s-master" type="range" min="0" max="100" value="55"/>
+            <output id="o-master">0.55</output>
+        </div>
+        <div class="row">
+            <button id="b-limit" class="on" aria-pressed="true">limiter</button>
+            <button id="b-mute" aria-pressed="false">mute</button>
+        </div>
+    </section>
+
+    <section class="panel">
+        <div class="panel-title"><span>event log</span><b>demo-side, read from pool state</b></div>
+        <div id="log"></div>
+    </section>
+</div>
+
+<div id="gate">
+    <div id="gate-inner">
+        <div class="panel-title"><span>audio context suspended</span></div>
+        <p>Browsers hold audio until you interact. Starting builds the atlas offline (six sprites, one buffer) and wires
+            the pool into a shared bus.</p>
+        <button id="gate-btn">start the pool</button>
+    </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "@zakkster/lite-audio-pool": "../AudioPool.js"
+  }
+}
+
+</script>
+
+<script type="module">
+    import {AudioPool} from '@zakkster/lite-audio-pool';
+
+    // ---------------------------------------------------------------------------
+    // Constants
+    // ---------------------------------------------------------------------------
+
+    const TAU = Math.PI * 2;
+    const SR = 44100;
+    const CAP_MAIN = 32;
+    const CAP_STEAL_MAX = 16;
+
+    const TELEM_MASK = 0x07;          // text updates every 8 frames (~7.5 Hz)
+    const FT_CAP = 256, FT_MASK = 255;      // frame-time ring
+    const TRAIL_CAP = 64, TRAIL_MASK = 63;  // field pad trail ring
+    const LOG_CAP = 64, LOG_MASK = 63;      // event ring
+    const LOG_ROWS = 9;
+    const HANDLE_ROWS = 6;
+    const ATLAS_BINS = 512;
+    const BARS = 48;
+
+    const SPRITE_IDS = ['laser', 'hit', 'coin', 'blip', 'boom', 'drone'];
+    const SPRITE_MAP = {
+        laser: {start: 0.00, duration: 0.18},
+        hit: {start: 0.20, duration: 0.12},
+        coin: {start: 0.35, duration: 0.26},
+        blip: {start: 0.65, duration: 0.10},
+        boom: {start: 0.80, duration: 0.60},
+        drone: {start: 1.45, duration: 2.00},
+    };
+    const ATLAS_DUR = 3.5;
+    const IDX_DRONE = 5;
+
+    const EV_PLAY = 0, EV_STEAL = 1, EV_STOP = 2, EV_NOOP = 3, EV_SYS = 4;
+    const EV_TAG = ['play', 'steal', 'stop', 'no-op', 'sys'];
+    const EV_CLASS = ['lrow play', 'lrow steal', 'lrow stop', 'lrow noop', 'lrow sys'];
+
+    const H_LIVE = 0, H_ENDED = 1, H_STOLEN = 2, H_STOPPED = 3;
+    const H_LABEL = ['LIVE', 'ENDED', 'STOLEN', 'STOPPED'];
+    const H_CLASS = ['hrow live', 'hrow ended', 'hrow stolen', 'hrow stopped'];
+
+    const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Channel index labels, precomputed: no string building inside the frame loop.
+    const CH_LABEL = new Array(CAP_MAIN);
+    for (let i = 0; i < CAP_MAIN; i++) CH_LABEL[i] = i < 10 ? '0' + i : '' + i;
+
+    // ---------------------------------------------------------------------------
+    // Palette. CSS keeps its oklch tokens; canvas needs literal strings, and it
+    // needs alpha variants that color-mix() cannot hand us at draw time.
+    // ---------------------------------------------------------------------------
+
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.fillStyle = '#000000';
+    probe.fillStyle = 'oklch(0.9 0.28 145)';
+    const OKLCH = probe.fillStyle !== '#000000';
+
+    const C_PHOS = OKLCH ? 'oklch(0.90 0.28 145)' : '#66ff66';
+    const C_PHOS_50 = OKLCH ? 'oklch(0.90 0.28 145 / 0.5)' : 'rgba(102,255,102,0.5)';
+    const C_PHOS_25 = OKLCH ? 'oklch(0.90 0.28 145 / 0.25)' : 'rgba(102,255,102,0.25)';
+    const C_PHOS_12 = OKLCH ? 'oklch(0.90 0.28 145 / 0.12)' : 'rgba(102,255,102,0.12)';
+    const C_AMBER = OKLCH ? 'oklch(0.83 0.17 75)' : '#ffb84d';
+    const C_AMBER_40 = OKLCH ? 'oklch(0.83 0.17 75 / 0.4)' : 'rgba(255,184,77,0.4)';
+    const C_HOT = OKLCH ? 'oklch(0.68 0.24 25)' : '#ff5252';
+    const C_HOT_35 = OKLCH ? 'oklch(0.68 0.24 25 / 0.35)' : 'rgba(255,82,82,0.35)';
+    const C_DIM = OKLCH ? 'oklch(0.48 0.08 145)' : '#3f5f42';
+    const C_GRID = OKLCH ? 'oklch(0.30 0.05 145)' : '#16221a';
+    const C_INK = OKLCH ? 'oklch(0.86 0.10 145)' : '#b8e6b8';
+    const C_FADE = OKLCH ? 'oklch(0.18 0.02 145 / 0.30)' : 'rgba(10,16,11,0.30)';
+    const C_CLEAR = OKLCH ? 'oklch(0.18 0.02 145)' : '#0a100b';
+
+    const FONT_S = '9px ui-monospace, Menlo, Consolas, monospace';
+    const FONT_M = '10px ui-monospace, Menlo, Consolas, monospace';
+
+    // ---------------------------------------------------------------------------
+    // DOM refs, cached at init
+    // ---------------------------------------------------------------------------
+
+    const $tabBtns = document.querySelectorAll('#tabs [data-scene]');
+    const $decks = [
+        document.getElementById('deck-scope'),
+        document.getElementById('deck-steal'),
+        document.getElementById('deck-field'),
+        document.getElementById('deck-stress'),
+    ];
+    const $spriteBtns = document.querySelectorAll('#sprites [data-sprite]');
+    const $capBtns = document.querySelectorAll('[data-cap]');
+    const $routeBtns = document.querySelectorAll('#routes [data-route]');
+
+    const $ctxState = document.getElementById('ctx-state');
+    const $ctxSr = document.getElementById('ctx-sr');
+    const $ctxTime = document.getElementById('ctx-time');
+    const $hudVoices = document.getElementById('hud-voices');
+    const $hudFps = document.getElementById('hud-fps');
+
+    const $sVol = document.getElementById('s-vol');
+    const $sPan = document.getElementById('s-pan');
+    const $sPitch = document.getElementById('s-pitch');
+    const $sRate = document.getElementById('s-rate');
+    const $oVol = document.getElementById('o-vol');
+    const $oPan = document.getElementById('o-pan');
+    const $oPitch = document.getElementById('o-pitch');
+    const $oRate = document.getElementById('o-rate');
+    const $bJitter = document.getElementById('b-jitter');
+    const $bStopAll = document.getElementById('b-stopall');
+    const $fire = document.getElementById('fire');
+
+    const $tPlays = document.getElementById('t-plays');
+    const $tActive = document.getElementById('t-active');
+    const $tSteals = document.getElementById('t-steals');
+    const $tRate = document.getElementById('t-rate');
+
+    const $handles = document.getElementById('handles');
+    const $stealCapLbl = document.getElementById('steal-cap-label');
+    const $stealHint = document.getElementById('steal-hint');
+    const $bDrone = document.getElementById('b-drone');
+    const $bOverrun = document.getElementById('b-overrun');
+    const $bStealStop = document.getElementById('b-steal-stopall');
+
+    const $sCut = document.getElementById('s-cut');
+    const $sWet = document.getElementById('s-wet');
+    const $sDrag = document.getElementById('s-drag');
+    const $oCut = document.getElementById('o-cut');
+    const $oWet = document.getElementById('o-wet');
+    const $oDrag = document.getElementById('o-drag');
+
+    const $sStress = document.getElementById('s-stress');
+    const $oStress = document.getElementById('o-stress');
+    const $bStress = document.getElementById('b-stress');
+    const $bStressReset = document.getElementById('b-stress-reset');
+    const $tFavg = document.getElementById('t-favg');
+    const $tFmax = document.getElementById('t-fmax');
+    const $tPps = document.getElementById('t-pps');
+    const $tSps = document.getElementById('t-sps');
+    const $tSactive = document.getElementById('t-sactive');
+    const $tHeap = document.getElementById('t-heap');
+
+    const $sMaster = document.getElementById('s-master');
+    const $oMaster = document.getElementById('o-master');
+    const $bLimit = document.getElementById('b-limit');
+    const $bMute = document.getElementById('b-mute');
+
+    const $log = document.getElementById('log');
+    const $gate = document.getElementById('gate');
+    const $gateBtn = document.getElementById('gate-btn');
+
+    // ---------------------------------------------------------------------------
+    // Canvas records
+    // ---------------------------------------------------------------------------
+
+    function mkCanvas(id) {
+        const el = document.getElementById(id);
+        let c = null;
+        try {
+            c = el.getContext('2d', {colorSpace: 'display-p3'});
+        } catch (e) {
+            c = null;
+        }
+        if (!c) c = el.getContext('2d');
+        return {el: el, c: c, w: 1, h: 1};
+    }
+
+    const cvScope = mkCanvas('cv-scope');
+    const cvSpec = mkCanvas('cv-spec');
+    const cvAtlas = mkCanvas('cv-atlas');
+    const cvMatS = mkCanvas('cv-mat-steal');
+    const cvPad = mkCanvas('cv-pad');
+    const cvMeter = mkCanvas('cv-meter');
+    const cvSpark = mkCanvas('cv-spark');
+    const cvMatM = mkCanvas('cv-mat-main');
+    const ALL_CV = [cvScope, cvSpec, cvAtlas, cvMatS, cvPad, cvMeter, cvSpark, cvMatM];
+
+    let needResize = 1;
+
+    function sizeCanvas(rec) {
+        const r = rec.el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) return;           // hidden scene, size it on reveal
+        const dpr = window.devicePixelRatio || 1;
+        rec.el.width = Math.round(r.width * dpr);
+        rec.el.height = Math.round(r.height * dpr);
+        rec.c.setTransform(dpr, 0, 0, dpr, 0, 0);
+        rec.w = r.width;
+        rec.h = r.height;
+    }
+
+    function sizeAll() {
+        for (let i = 0; i < ALL_CV.length; i++) sizeCanvas(ALL_CV[i]);
+    }
+
+    const ro = new ResizeObserver(() => {
+        needResize = 1;
+    });
+    for (let i = 0; i < ALL_CV.length; i++) ro.observe(ALL_CV[i].el);
+
+    // ---------------------------------------------------------------------------
+    // Atlas: six sprites rendered offline into one buffer
+    // ---------------------------------------------------------------------------
+
+    async function renderAtlas() {
+        const off = new OfflineAudioContext(1, Math.ceil(SR * ATLAS_DUR), SR);
+        const out = off.destination;
+
+        // laser 0.00-0.18: sine sweep with a clicky noise transient
+        const lOsc = off.createOscillator();
+        const lGain = off.createGain();
+        lOsc.frequency.setValueAtTime(1650, 0);
+        lOsc.frequency.exponentialRampToValueAtTime(150, 0.18);
+        lGain.gain.setValueAtTime(0.0001, 0);
+        lGain.gain.linearRampToValueAtTime(0.38, 0.004);
+        lGain.gain.exponentialRampToValueAtTime(0.001, 0.18);
+        lOsc.connect(lGain);
+        lGain.connect(out);
+        lOsc.start(0);
+        lOsc.stop(0.18);
+
+        // hit 0.20-0.32: noise crack through a bandpass, plus a square body
+        const hNoise = off.createBufferSource();
+        hNoise.buffer = noiseBuffer(off, 0.12);
+        const hBp = off.createBiquadFilter();
+        hBp.type = 'bandpass';
+        hBp.frequency.setValueAtTime(1800, 0.20);
+        hBp.Q.value = 1.4;
+        const hNg = off.createGain();
+        hNg.gain.setValueAtTime(0.5, 0.20);
+        hNg.gain.exponentialRampToValueAtTime(0.001, 0.28);
+        hNoise.connect(hBp);
+        hBp.connect(hNg);
+        hNg.connect(out);
+        hNoise.start(0.20);
+
+        const hOsc = off.createOscillator();
+        hOsc.type = 'square';
+        const hOg = off.createGain();
+        hOsc.frequency.setValueAtTime(420, 0.20);
+        hOsc.frequency.exponentialRampToValueAtTime(70, 0.32);
+        hOg.gain.setValueAtTime(0.0001, 0.20);
+        hOg.gain.linearRampToValueAtTime(0.22, 0.204);
+        hOg.gain.exponentialRampToValueAtTime(0.001, 0.32);
+        hOsc.connect(hOg);
+        hOg.connect(out);
+        hOsc.start(0.20);
+        hOsc.stop(0.32);
+
+        // coin 0.35-0.61: two square notes, B5 then E6
+        coinNote(off, out, 0.35, 0.07, 988);
+        coinNote(off, out, 0.42, 0.19, 1319);
+
+        // blip 0.65-0.75: triangle up-chirp
+        const bOsc = off.createOscillator();
+        bOsc.type = 'triangle';
+        const bGain = off.createGain();
+        bOsc.frequency.setValueAtTime(320, 0.65);
+        bOsc.frequency.exponentialRampToValueAtTime(1100, 0.74);
+        bGain.gain.setValueAtTime(0.0001, 0.65);
+        bGain.gain.linearRampToValueAtTime(0.3, 0.67);
+        bGain.gain.exponentialRampToValueAtTime(0.001, 0.75);
+        bOsc.connect(bGain);
+        bGain.connect(out);
+        bOsc.start(0.65);
+        bOsc.stop(0.75);
+
+        // boom 0.80-1.40: lowpassed noise body over a sub sine drop
+        const kNoise = off.createBufferSource();
+        kNoise.buffer = noiseBuffer(off, 0.6);
+        const kLp = off.createBiquadFilter();
+        kLp.type = 'lowpass';
+        kLp.frequency.setValueAtTime(2400, 0.80);
+        kLp.frequency.exponentialRampToValueAtTime(160, 1.40);
+        const kNg = off.createGain();
+        kNg.gain.setValueAtTime(0.55, 0.80);
+        kNg.gain.exponentialRampToValueAtTime(0.001, 1.38);
+        kNoise.connect(kLp);
+        kLp.connect(kNg);
+        kNg.connect(out);
+        kNoise.start(0.80);
+
+        const kSub = off.createOscillator();
+        const kSg = off.createGain();
+        kSub.frequency.setValueAtTime(95, 0.80);
+        kSub.frequency.exponentialRampToValueAtTime(32, 1.20);
+        kSg.gain.setValueAtTime(0.0001, 0.80);
+        kSg.gain.linearRampToValueAtTime(0.5, 0.815);
+        kSg.gain.exponentialRampToValueAtTime(0.001, 1.35);
+        kSub.connect(kSg);
+        kSg.connect(out);
+        kSub.start(0.80);
+        kSub.stop(1.40);
+
+        // drone 1.45-3.45: detuned saws under a slow filter sweep. Long on purpose:
+        // this is the sprite the steal scene uses to exhaust a small pool.
+        const dLp = off.createBiquadFilter();
+        dLp.type = 'lowpass';
+        dLp.Q.value = 6;
+        dLp.frequency.setValueAtTime(240, 1.45);
+        dLp.frequency.exponentialRampToValueAtTime(2600, 2.60);
+        dLp.frequency.exponentialRampToValueAtTime(300, 3.45);
+        const dGain = off.createGain();
+        dGain.gain.setValueAtTime(0.0001, 1.45);
+        dGain.gain.linearRampToValueAtTime(0.22, 1.60);
+        dGain.gain.setValueAtTime(0.22, 3.20);
+        dGain.gain.exponentialRampToValueAtTime(0.001, 3.45);
+        dLp.connect(dGain);
+        dGain.connect(out);
+        for (let i = 0; i < 3; i++) {
+            const o = off.createOscillator();
+            o.type = 'sawtooth';
+            o.frequency.value = 110 * (i === 2 ? 1.5 : 1);
+            o.detune.value = (i - 1) * 9;
+            o.connect(dLp);
+            o.start(1.45);
+            o.stop(3.45);
+        }
+
+        return await off.startRendering();
+    }
+
+    function noiseBuffer(off, seconds) {
+        const n = Math.floor(SR * seconds);
+        const buf = off.createBuffer(1, n, SR);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < n; i++) {
+            const decay = 1 - i / n;
+            d[i] = (Math.random() * 2 - 1) * decay * decay;
+        }
+        return buf;
+    }
+
+    function coinNote(off, out, at, dur, hz) {
+        const o = off.createOscillator();
+        o.type = 'square';
+        o.frequency.value = hz;
+        const g = off.createGain();
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.linearRampToValueAtTime(0.2, at + 0.005);
+        g.gain.setValueAtTime(0.2, at + dur * 0.6);
+        g.gain.exponentialRampToValueAtTime(0.001, at + dur);
+        o.connect(g);
+        g.connect(out);
+        o.start(at);
+        o.stop(at + dur);
+    }
+
+    function impulseResponse(ctx2, seconds, decay) {
+        const n = Math.floor(ctx2.sampleRate * seconds);
+        const buf = ctx2.createBuffer(2, n, ctx2.sampleRate);
+        for (let ch = 0; ch < 2; ch++) {
+            const d = buf.getChannelData(ch);
+            for (let i = 0; i < n; i++) {
+                d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay);
+            }
+        }
+        return buf;
+    }
+
+    // Peak envelope of the atlas, binned once. The atlas strip redraws from these.
+    const atlasMin = new Float32Array(ATLAS_BINS);
+    const atlasMax = new Float32Array(ATLAS_BINS);
+
+    function buildEnvelope(buf) {
+        const d = buf.getChannelData(0);
+        const n = d.length;
+        const per = n / ATLAS_BINS;
+        for (let b = 0; b < ATLAS_BINS; b++) {
+            let s = (b * per) | 0;
+            let e = ((b + 1) * per) | 0;
+            if (e > n) e = n;
+            if (e <= s) e = s + 1;
+            let mn = 1, mx = -1;
+            for (let i = s; i < e; i++) {
+                const v = d[i];
+                if (v < mn) mn = v;
+                if (v > mx) mx = v;
+            }
+            atlasMin[b] = mn;
+            atlasMax[b] = mx;
+        }
+    }
+
+    // Sprite regions as atlas fractions, precomputed for hit-testing and drawing.
+    const SPR_X0 = new Float32Array(6);
+    const SPR_X1 = new Float32Array(6);
+    for (let i = 0; i < 6; i++) {
+        const s = SPRITE_MAP[SPRITE_IDS[i]];
+        SPR_X0[i] = s.start / ATLAS_DUR;
+        SPR_X1[i] = (s.start + s.duration) / ATLAS_DUR;
+    }
+    const sprFlash = new Float32Array(6);
+
+    // ---------------------------------------------------------------------------
+    // Voice views. One per pool: everything the demo needs to draw a pool without
+    // asking the pool for anything but its two typed arrays.
+    // ---------------------------------------------------------------------------
+
+    function mkView(cap) {
+        const view = {
+            pool: null,
+            cap: cap,
+            start: new Float64Array(cap),
+            end: new Float64Array(cap),
+            pan: new Float32Array(cap),
+            sprite: new Uint8Array(cap),
+            flash: new Uint8Array(cap),
+            // Generation labels are cached: the string is rebuilt only when a
+            // generation actually moves, never once per cell per frame.
+            genMirror: new Uint32Array(cap).fill(0xFFFFFFFF),
+            genText: new Array(cap),
+        };
+        for (let i = 0; i < cap; i++) view.genText[i] = 'g0';
+        return view;
+    }
+
+    const viewMain = mkView(CAP_MAIN);
+    const viewSteal = mkView(CAP_STEAL_MAX);
+
+    // ---------------------------------------------------------------------------
+    // Event log: typed ring now, strings only when the throttle fires.
+    // ---------------------------------------------------------------------------
+
+    const logCode = new Uint8Array(LOG_CAP);
+    const logCh = new Uint8Array(LOG_CAP);
+    const logGen = new Uint32Array(LOG_CAP);
+    const logTime = new Float64Array(LOG_CAP);
+    const logSpr = new Uint8Array(LOG_CAP);
+    let logHead = 0;
+    let logDirty = 1;
+
+    function logPush(code, ch, gen, t, spr) {
+        const i = logHead & LOG_MASK;
+        logCode[i] = code;
+        logCh[i] = ch;
+        logGen[i] = gen;
+        logTime[i] = t;
+        logSpr[i] = spr;
+        logHead = (logHead + 1) | 0;
+        logDirty = 1;
+    }
+
+    const $logRows = new Array(LOG_ROWS);
+    const $logT = new Array(LOG_ROWS);
+    const $logTag = new Array(LOG_ROWS);
+    const $logMsg = new Array(LOG_ROWS);
+    const logRowState = new Int8Array(LOG_ROWS).fill(-1);
+
+    for (let i = 0; i < LOG_ROWS; i++) {
+        const row = document.createElement('div');
+        row.className = 'lrow sys';
+        const t = document.createElement('span');
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        const msg = document.createElement('span');
+        msg.className = 'msg';
+        row.append(t, tag, msg);
+        $log.appendChild(row);
+        $logRows[i] = row;
+        $logT[i] = t;
+        $logTag[i] = tag;
+        $logMsg[i] = msg;
+    }
+
+    const SYS_MSG = [
+        'pool ready: 32 voices on a shared bus',
+        'stop all: every handle invalidated',
+        'pool rebuilt: destroy() then new AudioPool()',
+        'route changed: bus rewired, pool untouched',
+    ];
+
+    function renderLog() {
+        for (let r = 0; r < LOG_ROWS; r++) {
+            const idx = logHead - 1 - r;
+            const row = $logRows[r];
+            if (idx < 0) {
+                if (logRowState[r] !== -1) {
+                    logRowState[r] = -1;
+                    row.className = 'lrow sys';
+                    $logT[r].textContent = '';
+                    $logTag[r].textContent = '';
+                    $logMsg[r].textContent = '';
+                }
+                continue;
+            }
+            const i = idx & LOG_MASK;
+            const code = logCode[i];
+            if (logRowState[r] !== code) {
+                logRowState[r] = code;
+                row.className = EV_CLASS[code];
+                $logTag[r].textContent = EV_TAG[code];
+            }
+            $logT[r].textContent = logTime[i].toFixed(2) + 's';
+            const ch = logCh[i];
+            const gen = logGen[i];
+            if (code === EV_PLAY) {
+                $logMsg[r].textContent = SPRITE_IDS[logSpr[i]] + ' -> ch ' + ch + ' gen ' + gen;
+            } else if (code === EV_STEAL) {
+                $logMsg[r].textContent = SPRITE_IDS[logSpr[i]] + ' stole ch ' + ch + ', gen -> ' + gen;
+            } else if (code === EV_STOP) {
+                $logMsg[r].textContent = 'stop ch ' + ch + ' gen ' + gen + ', 20ms fade';
+            } else if (code === EV_NOOP) {
+                $logMsg[r].textContent = 'stale gen ' + gen + ' on ch ' + ch + ', ignored';
+            } else {
+                $logMsg[r].textContent = SYS_MSG[logSpr[i]] || '';
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Handle table (steal scene)
+    // ---------------------------------------------------------------------------
+
+    const hHandle = new Uint32Array(HANDLE_ROWS);
+    const hChan = new Uint8Array(HANDLE_ROWS);
+    const hGen = new Uint32Array(HANDLE_ROWS);
+    const hStatus = new Uint8Array(HANDLE_ROWS);
+    const hEnd = new Float64Array(HANDLE_ROWS);
+    const hSpr = new Uint8Array(HANDLE_ROWS);
+    let hCount = 0;
+
+    const $hRows = new Array(HANDLE_ROWS);
+    const $hCode = new Array(HANDLE_ROWS);
+    const $hCh = new Array(HANDLE_ROWS);
+    const $hGen = new Array(HANDLE_ROWS);
+    const $hSt = new Array(HANDLE_ROWS);
+    const hRowState = new Int8Array(HANDLE_ROWS).fill(-1);
+
+    for (let i = 0; i < HANDLE_ROWS; i++) {
+        const row = document.createElement('div');
+        row.className = 'hrow live';
+        row.hidden = true;
+        const code = document.createElement('code');
+        const ch = document.createElement('span');
+        ch.className = 'meta';
+        const gen = document.createElement('span');
+        gen.className = 'meta';
+        const st = document.createElement('span');
+        st.className = 'st';
+        const btn = document.createElement('button');
+        btn.textContent = 'stop';
+        btn.dataset.row = i;
+        row.append(code, ch, gen, st, btn);
+        $handles.appendChild(row);
+        $hRows[i] = row;
+        $hCode[i] = code;
+        $hCh[i] = ch;
+        $hGen[i] = gen;
+        $hSt[i] = st;
+    }
+
+    function hex32(v) {
+        let s = (v >>> 0).toString(16).toUpperCase();
+        while (s.length < 8) s = '0' + s;
+        return '0x' + s;
+    }
+
+    function pushHandle(h, spr, endT) {
+        for (let i = HANDLE_ROWS - 1; i > 0; i--) {
+            hHandle[i] = hHandle[i - 1];
+            hChan[i] = hChan[i - 1];
+            hGen[i] = hGen[i - 1];
+            hStatus[i] = hStatus[i - 1];
+            hEnd[i] = hEnd[i - 1];
+            hSpr[i] = hSpr[i - 1];
+        }
+        hHandle[0] = h >>> 0;
+        hChan[0] = h & 0xFF;
+        hGen[0] = h >>> 8;
+        hStatus[0] = H_LIVE;
+        hEnd[0] = endT;
+        hSpr[0] = spr;
+        if (hCount < HANDLE_ROWS) hCount = (hCount + 1) | 0;
+    }
+
+    function markStolen(ch) {
+        for (let i = 0; i < hCount; i++) {
+            if (hStatus[i] === H_LIVE && hChan[i] === ch) hStatus[i] = H_STOLEN;
+        }
+    }
+
+    function renderHandles(now) {
+        for (let i = 0; i < HANDLE_ROWS; i++) {
+            const row = $hRows[i];
+            if (i >= hCount) {
+                if (!row.hidden) row.hidden = true;
+                continue;
+            }
+            if (row.hidden) row.hidden = false;
+            if (hStatus[i] === H_LIVE && !viewSteal.pool.isPlaying(hHandle[i])) {
+                // The pool owns the verdict. Whether it went quiet on schedule or was
+                // recycled under us is the only thing left for the demo to name.
+                hStatus[i] = now >= hEnd[i] ? H_ENDED : H_STOLEN;
+            }
+            const st = hStatus[i];
+            if (hRowState[i] !== st) {
+                hRowState[i] = st;
+                row.className = H_CLASS[st];
+                $hSt[i].textContent = H_LABEL[st];
+            }
+            $hCode[i].textContent = hex32(hHandle[i]);
+            $hCh[i].textContent = 'ch ' + hChan[i];
+            $hGen[i].textContent = 'gen ' + hGen[i];
+        }
+    }
+
+    $handles.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-row]');
+        if (!btn || !running) return;
+        const i = btn.dataset.row | 0;
+        if (i >= hCount) return;
+        const h = hHandle[i];
+        const ch = hChan[i];
+        const pool = viewSteal.pool;
+        const wasLive = pool.isPlaying(h);
+        // Called unconditionally, on purpose: a stale handle must be safe to pass in.
+        viewSteal.pool.stop(h);
+        const now = ctx.currentTime;
+        if (wasLive) {
+            hStatus[i] = H_STOPPED;
+            logPush(EV_STOP, ch, hGen[i], now, 0);
+            $stealHint.textContent = 'Stopped ch ' + ch + '. The generation counter bumps, so this handle is now dead too.';
+        } else {
+            logPush(EV_NOOP, ch, hGen[i], now, 0);
+            const busy = viewSteal.pool.expireTimes[ch] > now;
+            $stealHint.textContent = busy
+                ? 'No-op. Channel ' + ch + ' is at generation ' + viewSteal.pool.generations[ch] + ' now, so this handle cannot touch the voice that replaced it. Listen: it is still playing.'
+                : 'No-op. Channel ' + ch + ' is idle and the handle is stale. Nothing to stop, nothing broken.';
+        }
+    });
+
+    // ---------------------------------------------------------------------------
+    // Audio graph + state
+    // ---------------------------------------------------------------------------
+
+    let ctx = null;
+    let atlas = null;
+    let poolBus = null, lpf = null, conv = null, wet = null, master = null, limiter = null, post = null;
+    let analyser = null, anL = null, anR = null;
+    let wave = null, freq = null, mL = null, mR = null;
+    let running = false;
+
+    let scene = 0;
+    let sprite = 0;
+    let jitter = 1;
+    let volume = 0.70, panBase = 0.0, pitchBase = 1.0;
+    let holdRate = 20;
+    let dragRate = 12;
+    let stressRate = 120;
+    let stressOn = 0;
+    let route = 0;
+    let cutT = 0.7, wetVal = 0.45;
+    let limitOn = 1, muted = 0, masterVol = 0.55;
+    let stealCap = 4;
+
+    let plays = 0, steals = 0;
+    let playsWin = 0, stealsWin = 0;
+    let rateShown = 0, ppsShown = 0, spsShown = 0;
+    let winStart = 0;
+
+    let frameCount = 0;
+    let lastTs = 0;
+    let holdOn = 0, holdAcc = 0;
+    let stressAcc = 0;
+    let dragOn = 0, dragAcc = 0;
+    let padX = 0.5, padY = 0.5;
+
+    const ftBuf = new Float32Array(FT_CAP);
+    let ftHead = 0;
+
+    const barVal = new Float32Array(BARS);
+    const barPeak = new Float32Array(BARS);
+    const barEdge = new Uint16Array(BARS + 1);
+    for (let i = 0; i <= BARS; i++) {
+        let e = Math.round(1 * Math.pow(512, i / BARS));
+        if (i > 0 && e <= barEdge[i - 1]) e = barEdge[i - 1] + 1;
+        barEdge[i] = e;
+    }
+
+    const trailX = new Float32Array(TRAIL_CAP);
+    const trailY = new Float32Array(TRAIL_CAP);
+    const trailAge = new Float32Array(TRAIL_CAP);
+    let trailHead = 0;
+
+    let levL = 0, levR = 0, peakL = 0, peakR = 0;
+
+    // ---------------------------------------------------------------------------
+    // Start
+    // ---------------------------------------------------------------------------
+
+    async function start() {
+        ctx = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'interactive'});
+        if (ctx.state === 'suspended') await ctx.resume();
+
+        atlas = await renderAtlas();
+        buildEnvelope(atlas);
+
+        // pool -> poolBus -> [route] -> master -> [limiter] -> post -> analyser -> out
+        poolBus = ctx.createGain();
+        lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.Q.value = 1.1;
+        lpf.frequency.value = cutHz(cutT);
+        conv = ctx.createConvolver();
+        conv.buffer = impulseResponse(ctx, 1.4, 2.4);
+        wet = ctx.createGain();
+        wet.gain.value = wetVal;
+        conv.connect(wet);
+
+        master = ctx.createGain();
+        master.gain.value = masterVol;
+        limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.value = -16;
+        limiter.knee.value = 12;
+        limiter.ratio.value = 12;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.18;
+        post = ctx.createGain();
+
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0;
+
+        const split = ctx.createChannelSplitter(2);
+        anL = ctx.createAnalyser();
+        anR = ctx.createAnalyser();
+        anL.fftSize = 256;
+        anR.fftSize = 256;
+        // Analysers on a dead-end branch are not guaranteed to be pulled, so the
+        // meter taps land in a muted sink that is connected to the destination.
+        const sink = ctx.createGain();
+        sink.gain.value = 0;
+        post.connect(split);
+        split.connect(anL, 0);
+        split.connect(anR, 1);
+        anL.connect(sink);
+        anR.connect(sink);
+        sink.connect(ctx.destination);
+
+        lpf.connect(master);
+        wet.connect(master);
+        post.connect(analyser);
+        analyser.connect(ctx.destination);
+        applyLimiter();
+        applyRoute();
+
+        wave = new Uint8Array(analyser.fftSize);
+        freq = new Uint8Array(analyser.frequencyBinCount);
+        mL = new Uint8Array(anL.fftSize);
+        mR = new Uint8Array(anR.fftSize);
+
+        viewMain.pool = new AudioPool(ctx, atlas, SPRITE_MAP, CAP_MAIN, poolBus);
+        buildStealPool();
+
+        $ctxSr.textContent = (ctx.sampleRate / 1000).toFixed(1) + 'k';
+        logPush(EV_SYS, 0, 0, ctx.currentTime, 0);
+
+        running = true;
+        needResize = 1;
+        lastTs = performance.now();
+        winStart = lastTs;
+        requestAnimationFrame(frame);
+    }
+
+    function buildStealPool() {
+        if (viewSteal.pool) viewSteal.pool.destroy();
+        viewSteal.pool = new AudioPool(ctx, atlas, SPRITE_MAP, stealCap, poolBus);
+        viewSteal.cap = stealCap;
+        viewSteal.flash.fill(0);
+        hCount = 0;
+        hRowState.fill(-1);
+        $stealCapLbl.textContent = stealCap + ' channels';
+    }
+
+    $gateBtn.addEventListener('click', async () => {
+        $gateBtn.disabled = true;
+        $gateBtn.textContent = 'building atlas';
+        try {
+            await start();
+            $gate.hidden = true;
+        } catch (e) {
+            $gateBtn.textContent = 'failed, reload';
+            console.error(e);
+        }
+    });
+
+    // ---------------------------------------------------------------------------
+    // Fire
+    // ---------------------------------------------------------------------------
+
+    function fireInto(view, spr, vol, pan, pitch) {
+        const pool = view.pool;
+        if (!pool) return -1;
+        const cap = pool.capacity;
+        const exp = pool.expireTimes;
+        const now = ctx.currentTime;
+
+        // Predict the pool's choice before calling it, so the demo can name the
+        // victim. Demo-only observability: a game never needs this.
+        let free = -1, victim = -1, oldest = Infinity;
+        for (let i = 0; i < cap; i++) {
+            if (exp[i] <= now) {
+                free = i;
+                break;
+            }
+            if (exp[i] < oldest) {
+                oldest = exp[i];
+                victim = i;
+            }
+        }
+        const stealing = free < 0;
+        if (stealing && victim >= 0 && view === viewSteal) markStolen(victim);
+
+        const h = pool.play(SPRITE_IDS[spr], vol, pan, pitch);
+        if (h < 0) return -1;
+
+        const ch = h & 0xFF;
+        const gen = h >>> 8;
+        view.start[ch] = now;
+        view.end[ch] = exp[ch];
+        view.pan[ch] = pan;
+        view.sprite[ch] = spr;
+        if (stealing) {
+            view.flash[ch] = 12;
+            steals = (steals + 1) | 0;
+            stealsWin = (stealsWin + 1) | 0;
+        }
+        logPush(stealing ? EV_STEAL : EV_PLAY, ch, gen, now, spr);
+        sprFlash[spr] = 1;
+        plays = (plays + 1) | 0;
+        playsWin = (playsWin + 1) | 0;
+        return h;
+    }
+
+    function fireMain() {
+        if (!running) return;
+        let pan = panBase;
+        let pitch = pitchBase;
+        if (jitter) {
+            pan += (Math.random() * 2 - 1) * 0.5;
+            if (pan < -1) pan = -1;
+            if (pan > 1) pan = 1;
+            pitch *= 0.85 + Math.random() * 0.3;
+        }
+        fireInto(viewMain, sprite, volume, pan, pitch);
+    }
+
+    function fireSteal() {
+        if (!running) return;
+        const h = fireInto(viewSteal, IDX_DRONE, 0.5, (Math.random() * 2 - 1) * 0.6, 0.92 + Math.random() * 0.16);
+        if (h >= 0) pushHandle(h, IDX_DRONE, viewSteal.pool.expireTimes[h & 0xFF]);
+    }
+
+    function firePad() {
+        if (!running) return;
+        const pan = padX * 2 - 1;
+        const pitch = 0.5 + (1 - padY) * 1.5;
+        const h = fireInto(viewMain, sprite, volume * 0.8, pan, pitch);
+        if (h < 0) return;
+        const i = trailHead & TRAIL_MASK;
+        trailX[i] = padX;
+        trailY[i] = padY;
+        trailAge[i] = 1;
+        trailHead = (trailHead + 1) | 0;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Frame loop
+    // ---------------------------------------------------------------------------
+
+    function frame(ts) {
+        if (!running) return;
+        frameCount = (frameCount + 1) | 0;
+
+        let dt = (ts - lastTs) / 1000;
+        lastTs = ts;
+        ftBuf[ftHead & FT_MASK] = dt * 1000;
+        ftHead = (ftHead + 1) | 0;
+        if (dt > 0.1) dt = 0.016;                       // a tab switch must not burst-fire
+
+        if (needResize) {
+            needResize = 0;
+            sizeAll();
+        }
+
+        const now = ctx.currentTime;
+
+        // Auto-fire: hold, pad drag, stress. Each is accumulator driven and capped.
+        if (holdOn && scene === 0) {
+            const step = 1 / holdRate;
+            holdAcc += dt;
+            let n = 0;
+            while (holdAcc >= step && n < 8) {
+                fireMain();
+                holdAcc -= step;
+                n = (n + 1) | 0;
+            }
+            if (holdAcc > step) holdAcc = 0;
+        } else if (!holdOn) {
+            holdAcc = 0;
+        }
+
+        if (dragOn && scene === 2 && dragRate > 0) {
+            const step = 1 / dragRate;
+            dragAcc += dt;
+            let n = 0;
+            while (dragAcc >= step && n < 8) {
+                firePad();
+                dragAcc -= step;
+                n = (n + 1) | 0;
+            }
+            if (dragAcc > step) dragAcc = 0;
+        } else if (!dragOn) {
+            dragAcc = 0;
+        }
+
+        if (stressOn && stressRate > 0) {
+            const step = 1 / stressRate;
+            stressAcc += dt;
+            let n = 0;
+            while (stressAcc >= step && n < 32) {
+                fireMain();
+                stressAcc -= step;
+                n = (n + 1) | 0;
+            }
+            if (stressAcc > step) stressAcc = 0;
+        } else {
+            stressAcc = 0;
+        }
+
+        decayFlash(viewMain);
+        decayFlash(viewSteal);
+        for (let i = 0; i < 6; i++) if (sprFlash[i] > 0) sprFlash[i] -= dt * 3;
+
+        if (scene === 0) {
+            analyser.getByteTimeDomainData(wave);
+            analyser.getByteFrequencyData(freq);
+            drawScope();
+            drawSpectrum();
+            drawAtlas();
+        } else if (scene === 1) {
+            drawMatrix(cvMatS, viewSteal, now);
+        } else if (scene === 2) {
+            readMeters(dt);
+            drawPad(dt);
+            drawMeter();
+        } else {
+            drawSpark();
+            drawMatrix(cvMatM, viewMain, now);
+        }
+
+        if ((frameCount & TELEM_MASK) === 0) telemetry(now, ts);
+
+        requestAnimationFrame(frame);
+    }
+
+    function decayFlash(view) {
+        const f = view.flash;
+        for (let i = 0; i < f.length; i++) if (f[i] > 0) f[i] = (f[i] - 1) | 0;
+    }
+
+    function telemetry(now, ts) {
+        if (ts - winStart >= 1000) {
+            const secs = (ts - winStart) / 1000;
+            rateShown = Math.round(playsWin / secs);
+            ppsShown = rateShown;
+            spsShown = Math.round(stealsWin / secs);
+            playsWin = 0;
+            stealsWin = 0;
+            winStart = ts;
+        }
+
+        $ctxState.textContent = ctx.state;
+        $ctxTime.textContent = now.toFixed(2);
+
+        if (scene === 0) {
+            const active = viewMain.pool.activeCount();
+            $hudVoices.textContent = active + ' voices';
+            $tPlays.textContent = plays;
+            $tActive.textContent = active + ' / ' + CAP_MAIN;
+            $tSteals.textContent = steals;
+            $tRate.textContent = rateShown + '/s';
+        } else if (scene === 1) {
+            renderHandles(now);
+        } else if (scene === 3) {
+            let sum = 0, max = 0;
+            const n = ftHead < FT_CAP ? ftHead : FT_CAP;
+            for (let i = 0; i < n; i++) {
+                const v = ftBuf[i];
+                sum += v;
+                if (v > max) max = v;
+            }
+            const avg = n > 0 ? sum / n : 0;
+            $tFavg.textContent = avg.toFixed(1) + ' ms';
+            $tFmax.textContent = max.toFixed(1) + ' ms';
+            $tFmax.className = max > 20 ? 'warn' : '';
+            $hudFps.textContent = (avg > 0 ? Math.round(1000 / avg) : 0) + ' fps';
+            $tPps.textContent = ppsShown;
+            $tSps.textContent = spsShown;
+            const active = viewMain.pool.activeCount();
+            $tSactive.textContent = active + ' / ' + CAP_MAIN;
+            const mem = performance.memory;
+            $tHeap.textContent = mem ? (mem.usedJSHeapSize / 1048576).toFixed(1) + ' MB' : 'n/a';
+        }
+
+        if (logDirty) {
+            logDirty = 0;
+            renderLog();
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draw: scope
+    // ---------------------------------------------------------------------------
+
+    function drawScope() {
+        const c = cvScope.c, w = cvScope.w, h = cvScope.h;
+
+        if (REDUCED) {
+            c.fillStyle = C_CLEAR;
+            c.fillRect(0, 0, w, h);
+        } else {
+            c.fillStyle = C_FADE;                       // phosphor persistence
+            c.fillRect(0, 0, w, h);
+        }
+
+        // graticule: 10 x 8 divisions, centre lines brighter
+        c.lineWidth = 1;
+        c.strokeStyle = C_GRID;
+        c.beginPath();
+        for (let i = 1; i < 10; i++) {
+            const x = Math.round(w * i / 10) + 0.5;
+            c.moveTo(x, 0);
+            c.lineTo(x, h);
+        }
+        for (let i = 1; i < 8; i++) {
+            const y = Math.round(h * i / 8) + 0.5;
+            c.moveTo(0, y);
+            c.lineTo(w, y);
+        }
+        c.stroke();
+        c.strokeStyle = C_PHOS_25;
+        c.beginPath();
+        c.moveTo(0, Math.round(h / 2) + 0.5);
+        c.lineTo(w, Math.round(h / 2) + 0.5);
+        c.moveTo(Math.round(w / 2) + 0.5, 0);
+        c.lineTo(Math.round(w / 2) + 0.5, h);
+        c.stroke();
+
+        // rising-edge trigger: lock the trace so it does not swim
+        const n = wave.length;
+        const half = n >> 1;
+        let trig = 0;
+        for (let i = 1; i < half; i++) {
+            if (wave[i - 1] < 128 && wave[i] >= 128) {
+                trig = i;
+                break;
+            }
+        }
+
+        const span = half;
+        const step = span / w;
+        const amp = h * 0.42;
+        const mid = h * 0.5;
+
+        c.beginPath();
+        for (let x = 0; x < w; x++) {
+            const i = trig + ((x * step) | 0);
+            const y = mid - ((wave[i] - 128) / 128) * amp;
+            if (x === 0) c.moveTo(x, y);
+            else c.lineTo(x, y);
+        }
+        c.strokeStyle = C_PHOS;
+        c.globalAlpha = 0.28;
+        c.lineWidth = 4.5;
+        c.stroke();
+        c.globalAlpha = 1;
+        c.lineWidth = 1.25;
+        c.stroke();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draw: spectrum
+    // ---------------------------------------------------------------------------
+
+    function drawSpectrum() {
+        const c = cvSpec.c, w = cvSpec.w, h = cvSpec.h;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+
+        const bw = w / BARS;
+        for (let b = 0; b < BARS; b++) {
+            const s = barEdge[b];
+            const e = barEdge[b + 1];
+            let sum = 0;
+            for (let i = s; i < e; i++) sum += freq[i];
+            const v = (sum / (e - s)) / 255;
+
+            let cur = barVal[b] * 0.82;
+            if (v > cur) cur = v;
+            barVal[b] = cur;
+
+            let pk = barPeak[b] - 0.008;
+            if (cur > pk) pk = cur;
+            barPeak[b] = pk;
+
+            const x = b * bw;
+            const bh = cur * (h - 3);
+            c.fillStyle = cur > 0.72 ? C_AMBER : C_PHOS_50;
+            c.fillRect(x + 0.5, h - bh, bw - 1.5, bh);
+            if (pk > 0.02) {
+                c.fillStyle = C_AMBER_40;
+                c.fillRect(x + 0.5, h - pk * (h - 3) - 2, bw - 1.5, 2);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draw: atlas strip
+    // ---------------------------------------------------------------------------
+
+    function drawAtlas() {
+        const c = cvAtlas.c, w = cvAtlas.w, h = cvAtlas.h;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+
+        const mid = h * 0.5;
+        const amp = h * 0.42;
+
+        // sprite regions
+        for (let s = 0; s < 6; s++) {
+            const x0 = SPR_X0[s] * w;
+            const x1 = SPR_X1[s] * w;
+            const sel = s === sprite;
+            const fl = sprFlash[s] > 0 ? sprFlash[s] : 0;
+            c.fillStyle = sel ? C_PHOS_12 : 'rgba(255,255,255,0.02)';
+            c.fillRect(x0, 0, x1 - x0, h);
+            if (fl > 0) {
+                c.globalAlpha = fl * 0.35;
+                c.fillStyle = C_AMBER;
+                c.fillRect(x0, 0, x1 - x0, h);
+                c.globalAlpha = 1;
+            }
+            c.strokeStyle = sel ? C_PHOS_50 : C_GRID;
+            c.lineWidth = 1;
+            c.beginPath();
+            c.moveTo(Math.round(x0) + 0.5, 0);
+            c.lineTo(Math.round(x0) + 0.5, h);
+            c.moveTo(Math.round(x1) + 0.5, 0);
+            c.lineTo(Math.round(x1) + 0.5, h);
+            c.stroke();
+            c.fillStyle = sel ? C_PHOS : C_DIM;
+            c.font = FONT_M;
+            c.fillText(SPRITE_IDS[s], x0 + 4, 12);
+        }
+
+        // envelope
+        c.strokeStyle = C_PHOS_50;
+        c.lineWidth = 1;
+        c.beginPath();
+        for (let b = 0; b < ATLAS_BINS; b++) {
+            const x = (b / ATLAS_BINS) * w + 0.5;
+            c.moveTo(x, mid - atlasMax[b] * amp);
+            c.lineTo(x, mid - atlasMin[b] * amp);
+        }
+        c.stroke();
+    }
+
+    cvAtlas.el.addEventListener('pointerdown', (e) => {
+        if (!running) return;
+        const r = cvAtlas.el.getBoundingClientRect();          // once per gesture
+        const f = (e.clientX - r.left) / r.width;
+        for (let s = 0; s < 6; s++) {
+            if (f >= SPR_X0[s] && f <= SPR_X1[s]) {
+                selectSprite(s);
+                fireMain();
+                return;
+            }
+        }
+    });
+
+    // ---------------------------------------------------------------------------
+    // Draw: voice matrix
+    // ---------------------------------------------------------------------------
+
+    function drawMatrix(rec, view, now) {
+        const c = rec.c, w = rec.w, h = rec.h;
+        const pool = view.pool;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+        if (!pool) return;
+
+        const cap = pool.capacity;
+        const cols = cap <= 4 ? 2 : cap <= 16 ? 4 : 8;
+        const rows = Math.ceil(cap / cols);
+        const pad = 4;
+        const cw = (w - pad) / cols - pad;
+        const ch = (h - pad) / rows - pad;
+
+        c.font = FONT_S;
+        c.textBaseline = 'top';
+
+        for (let i = 0; i < cap; i++) {
+            const cx = pad + (i % cols) * (cw + pad);
+            const cy = pad + ((i / cols) | 0) * (ch + pad);
+            const live = pool.expireTimes[i] > now;
+            const flash = view.flash[i] > 0;
+
+            c.fillStyle = live ? C_PHOS_12 : 'rgba(255,255,255,0.015)';
+            c.fillRect(cx, cy, cw, ch);
+
+            if (live) {
+                // remaining life, drawn as a bar climbing down the cell
+                const t0 = view.start[i];
+                const t1 = view.end[i];
+                const span = t1 - t0;
+                let life = span > 0 ? (t1 - now) / span : 0;
+                if (life < 0) life = 0;
+                if (life > 1) life = 1;
+                c.fillStyle = C_PHOS_25;
+                c.fillRect(cx, cy + ch * (1 - life), cw, ch * life);
+
+                // pan dot on the cell's own axis
+                const px = cx + cw * 0.5 + view.pan[i] * cw * 0.42;
+                c.fillStyle = C_PHOS;
+                c.beginPath();
+                c.arc(px, cy + ch - 5, 2, 0, TAU);
+                c.fill();
+
+                c.fillStyle = C_INK;
+                c.fillText(SPRITE_IDS[view.sprite[i]], cx + 3, cy + 12);
+            }
+
+            c.strokeStyle = flash ? C_HOT : live ? C_PHOS_50 : C_GRID;
+            c.lineWidth = flash ? 2 : 1;
+            c.strokeRect(cx + 0.5, cy + 0.5, cw - 1, ch - 1);
+            if (flash) {
+                c.fillStyle = C_HOT_35;
+                c.fillRect(cx, cy, cw, ch);
+            }
+
+            c.fillStyle = live ? C_PHOS : C_DIM;
+            c.fillText(CH_LABEL[i], cx + 3, cy + 3);
+
+            const g = pool.generations[i];
+            if (view.genMirror[i] !== g) {
+                view.genMirror[i] = g;
+                view.genText[i] = 'g' + g;               // only on an actual bump
+            }
+            c.fillStyle = C_DIM;
+            c.fillText(view.genText[i], cx + cw - 22, cy + 3);
+        }
+        c.textBaseline = 'alphabetic';
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draw: field pad + meters
+    // ---------------------------------------------------------------------------
+
+    function drawPad(dt) {
+        const c = cvPad.c, w = cvPad.w, h = cvPad.h;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+
+        c.strokeStyle = C_GRID;
+        c.lineWidth = 1;
+        c.beginPath();
+        for (let i = 1; i < 8; i++) {
+            const x = Math.round(w * i / 8) + 0.5;
+            const y = Math.round(h * i / 8) + 0.5;
+            c.moveTo(x, 0);
+            c.lineTo(x, h);
+            c.moveTo(0, y);
+            c.lineTo(w, y);
+        }
+        c.stroke();
+
+        c.strokeStyle = C_PHOS_25;
+        c.beginPath();
+        c.moveTo(Math.round(w / 2) + 0.5, 0);
+        c.lineTo(Math.round(w / 2) + 0.5, h);
+        c.stroke();
+
+        c.font = FONT_M;
+        c.fillStyle = C_DIM;
+        c.fillText('pan -1', 6, h - 8);
+        c.fillText('pan +1', w - 46, h - 8);
+        c.fillText('pitch 2.0', 6, 14);
+        c.fillText('pitch 0.5', 6, h - 22);
+
+        for (let k = 0; k < TRAIL_CAP; k++) {
+            const a = trailAge[k];
+            if (a <= 0) continue;
+            trailAge[k] = a - dt * 1.6;
+            const x = trailX[k] * w;
+            const y = trailY[k] * h;
+            c.globalAlpha = a * 0.85;
+            c.fillStyle = C_PHOS;
+            c.beginPath();
+            c.arc(x, y, 2 + (1 - a) * 14, 0, TAU);
+            c.fill();
+        }
+        c.globalAlpha = 1;
+
+        const cx = padX * w;
+        const cy = padY * h;
+        c.strokeStyle = dragOn ? C_AMBER : C_PHOS_50;
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(cx, 0);
+        c.lineTo(cx, h);
+        c.moveTo(0, cy);
+        c.lineTo(w, cy);
+        c.stroke();
+        c.beginPath();
+        c.arc(cx, cy, 6, 0, TAU);
+        c.stroke();
+    }
+
+    function readMeters(dt) {
+        anL.getByteTimeDomainData(mL);
+        anR.getByteTimeDomainData(mR);
+        levL = smoothRms(mL, levL, dt);
+        levR = smoothRms(mR, levR, dt);
+        peakL = peakL > levL ? peakL - dt * 0.35 : levL;
+        peakR = peakR > levR ? peakR - dt * 0.35 : levR;
+    }
+
+    function smoothRms(buf, prev, dt) {
+        let acc = 0;
+        for (let i = 0; i < buf.length; i++) {
+            const v = (buf[i] - 128) / 128;
+            acc += v * v;
+        }
+        const rms = Math.sqrt(acc / buf.length);
+        const k = rms > prev ? 0.5 : 1 - Math.exp(-dt * 6);
+        return prev + (rms - prev) * k;
+    }
+
+    function drawMeter() {
+        const c = cvMeter.c, w = cvMeter.w, h = cvMeter.h;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+        meterBar(c, 0, w, h * 0.5 - 3, levL, peakL, 'L');
+        meterBar(c, h * 0.5 + 3, w, h * 0.5 - 3, levR, peakR, 'R');
+    }
+
+    function meterBar(c, y, w, h, lev, peak, label) {
+        const x0 = 20;
+        const bw = w - x0 - 8;
+        c.fillStyle = C_DIM;
+        c.font = FONT_M;
+        c.fillText(label, 6, y + h * 0.5 + 4);
+        c.fillStyle = 'rgba(255,255,255,0.03)';
+        c.fillRect(x0, y, bw, h);
+        const v = lev > 1 ? 1 : lev;
+        c.fillStyle = v > 0.7 ? C_HOT : v > 0.45 ? C_AMBER : C_PHOS_50;
+        c.fillRect(x0, y, bw * v, h);
+        const p = peak > 1 ? 1 : peak;
+        if (p > 0.01) {
+            c.fillStyle = C_INK;
+            c.fillRect(x0 + bw * p - 1, y, 2, h);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draw: frame time sparkline
+    // ---------------------------------------------------------------------------
+
+    function drawSpark() {
+        const c = cvSpark.c, w = cvSpark.w, h = cvSpark.h;
+        c.fillStyle = C_CLEAR;
+        c.fillRect(0, 0, w, h);
+
+        const scale = h / 34;                            // 34ms full scale
+        const budget = h - 16.7 * scale;
+
+        c.strokeStyle = C_AMBER_40;
+        c.setLineDash([4, 4]);
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(0, Math.round(budget) + 0.5);
+        c.lineTo(w, Math.round(budget) + 0.5);
+        c.stroke();
+        c.setLineDash([]);
+        c.fillStyle = C_DIM;
+        c.font = FONT_M;
+        c.fillText('16.7ms', 4, budget - 4);
+
+        const bw = w / FT_CAP;
+        for (let k = 0; k < FT_CAP; k++) {
+            const idx = (ftHead + k) & FT_MASK;
+            const v = ftBuf[idx];
+            if (v <= 0) continue;
+            let bh = v * scale;
+            if (bh > h) bh = h;
+            c.fillStyle = v > 20 ? C_HOT : v > 17.5 ? C_AMBER : C_PHOS_50;
+            c.fillRect(k * bw, h - bh, bw > 1.5 ? bw - 0.5 : bw, bh);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Routing + master
+    // ---------------------------------------------------------------------------
+
+    function cutHz(t) {
+        return 120 * Math.pow(160, t);
+    }   // 120 Hz .. ~19 kHz
+
+    function applyRoute() {
+        poolBus.disconnect();
+        if (route === 0) {
+            poolBus.connect(master);
+        } else if (route === 1) {
+            poolBus.connect(lpf);
+        } else {
+            poolBus.connect(master);                       // dry
+            poolBus.connect(conv);                         // wet
+        }
+    }
+
+    function applyLimiter() {
+        master.disconnect();
+        limiter.disconnect();
+        if (limitOn) {
+            master.connect(limiter);
+            limiter.connect(post);
+        } else {
+            master.connect(post);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Input
+    // ---------------------------------------------------------------------------
+
+    function selectSprite(i) {
+        sprite = i;
+        for (let k = 0; k < $spriteBtns.length; k++) {
+            const on = k === i;
+            $spriteBtns[k].classList.toggle('on', on);
+            $spriteBtns[k].setAttribute('aria-pressed', on ? 'true' : 'false');
+        }
+    }
+
+    $spriteBtns.forEach((b) => {
+        b.addEventListener('click', () => selectSprite(b.dataset.sprite | 0));
+    });
+
+    $tabBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+            const s = b.dataset.scene | 0;
+            if (s === scene) return;
+            scene = s;
+            holdOn = 0;
+            dragOn = 0;
+            $fire.classList.remove('on');
+            for (let i = 0; i < $tabBtns.length; i++) {
+                const on = i === s;
+                $tabBtns[i].classList.toggle('on', on);
+                $tabBtns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+                $decks[i].hidden = !on;
+            }
+            needResize = 1;
+        });
+    });
+
+    $capBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+            const cap = b.dataset.cap | 0;
+            if (cap === stealCap || !running) return;
+            stealCap = cap;
+            for (let i = 0; i < $capBtns.length; i++) {
+                const on = ($capBtns[i].dataset.cap | 0) === cap;
+                $capBtns[i].classList.toggle('on', on);
+                $capBtns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            buildStealPool();
+            logPush(EV_SYS, 0, 0, ctx.currentTime, 2);
+        });
+    });
+
+    $routeBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+            if (!running) return;
+            route = b.dataset.route | 0;
+            for (let i = 0; i < $routeBtns.length; i++) {
+                const on = ($routeBtns[i].dataset.route | 0) === route;
+                $routeBtns[i].classList.toggle('on', on);
+                $routeBtns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            applyRoute();
+            logPush(EV_SYS, 0, 0, ctx.currentTime, 3);
+        });
+    });
+
+    $sVol.addEventListener('input', () => {
+        volume = ($sVol.value | 0) / 100;
+        $oVol.textContent = volume.toFixed(2);
+    });
+    $sPan.addEventListener('input', () => {
+        panBase = ($sPan.value | 0) / 100;
+        $oPan.textContent = panBase.toFixed(2);
+    });
+    $sPitch.addEventListener('input', () => {
+        pitchBase = ($sPitch.value | 0) / 100;
+        $oPitch.textContent = pitchBase.toFixed(2);
+    });
+    $sRate.addEventListener('input', () => {
+        holdRate = $sRate.value | 0;
+        $oRate.textContent = holdRate + '/s';
+    });
+    $sDrag.addEventListener('input', () => {
+        dragRate = $sDrag.value | 0;
+        $oDrag.textContent = dragRate > 0 ? dragRate + '/s' : 'tap';
+    });
+    $sCut.addEventListener('input', () => {
+        cutT = ($sCut.value | 0) / 100;
+        $oCut.textContent = Math.round(cutHz(cutT)) + ' Hz';
+        if (running) lpf.frequency.setTargetAtTime(cutHz(cutT), ctx.currentTime, 0.01);
+    });
+    $sWet.addEventListener('input', () => {
+        wetVal = ($sWet.value | 0) / 100;
+        $oWet.textContent = wetVal.toFixed(2);
+        if (running) wet.gain.setTargetAtTime(wetVal, ctx.currentTime, 0.02);
+    });
+    $sStress.addEventListener('input', () => {
+        stressRate = $sStress.value | 0;
+        $oStress.textContent = stressRate + '/s';
+    });
+    $sMaster.addEventListener('input', () => {
+        masterVol = ($sMaster.value | 0) / 100;
+        $oMaster.textContent = masterVol.toFixed(2);
+        if (running && !muted) master.gain.setTargetAtTime(masterVol, ctx.currentTime, 0.01);
+    });
+
+    $bJitter.addEventListener('click', () => {
+        jitter = jitter ? 0 : 1;
+        $bJitter.classList.toggle('on', !!jitter);
+        $bJitter.setAttribute('aria-pressed', jitter ? 'true' : 'false');
+    });
+
+    $bLimit.addEventListener('click', () => {
+        if (!running) return;
+        limitOn = limitOn ? 0 : 1;
+        $bLimit.classList.toggle('on', !!limitOn);
+        $bLimit.setAttribute('aria-pressed', limitOn ? 'true' : 'false');
+        applyLimiter();
+    });
+
+    $bMute.addEventListener('click', () => {
+        if (!running) return;
+        muted = muted ? 0 : 1;
+        $bMute.classList.toggle('on', !!muted);
+        $bMute.setAttribute('aria-pressed', muted ? 'true' : 'false');
+        master.gain.setTargetAtTime(muted ? 0 : masterVol, ctx.currentTime, 0.01);
+    });
+
+    $bStopAll.addEventListener('click', stopEverything);
+    $bStealStop.addEventListener('click', stopEverything);
+
+    function stopEverything() {
+        if (!running) return;
+        viewMain.pool.stopAll();
+        viewSteal.pool.stopAll();
+        for (let i = 0; i < hCount; i++) if (hStatus[i] === H_LIVE) hStatus[i] = H_STOPPED;
+        logPush(EV_SYS, 0, 0, ctx.currentTime, 1);
+    }
+
+    $bDrone.addEventListener('click', fireSteal);
+    $bOverrun.addEventListener('click', () => {
+        if (!running) return;
+        const n = stealCap + 2;
+        for (let i = 0; i < n; i++) fireSteal();
+        $stealHint.textContent = 'Fired ' + n + ' drones into ' + stealCap + ' channels. The last 2 stole the 2 oldest voices, and the handles they invalidated are marked STOLEN.';
+    });
+
+    $bStress.addEventListener('click', () => {
+        stressOn = stressOn ? 0 : 1;
+        $bStress.classList.toggle('on', !!stressOn);
+        $bStress.textContent = stressOn ? 'stop' : 'run';
+    });
+    $bStressReset.addEventListener('click', () => {
+        plays = 0;
+        steals = 0;
+        playsWin = 0;
+        stealsWin = 0;
+        ftBuf.fill(0);
+        ftHead = 0;
+    });
+
+    // Fire button: pointer for press-and-hold, click stays keyboard reachable.
+    $fire.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        $fire.setPointerCapture(e.pointerId);
+        $fire.classList.add('on');
+        holdOn = 1;
+        holdAcc = 0;
+        fireMain();
+    });
+    $fire.addEventListener('pointerup', releaseFire);
+    $fire.addEventListener('pointercancel', releaseFire);
+    $fire.addEventListener('lostpointercapture', releaseFire);
+
+    function releaseFire() {
+        $fire.classList.remove('on');
+        holdOn = 0;
+        holdAcc = 0;
+    }
+
+    // Field pad
+    let padRect = null;
+
+    cvPad.el.addEventListener('pointerdown', (e) => {
+        if (!running) return;
+        e.preventDefault();
+        cvPad.el.setPointerCapture(e.pointerId);
+        padRect = cvPad.el.getBoundingClientRect();       // once per gesture
+        updatePad(e);
+        dragOn = 1;
+        firePad();
+    });
+    cvPad.el.addEventListener('pointermove', (e) => {
+        if (!dragOn) return;
+        updatePad(e);                                    // no allocation per move
+    });
+    cvPad.el.addEventListener('pointerup', () => {
+        dragOn = 0;
+    });
+    cvPad.el.addEventListener('pointercancel', () => {
+        dragOn = 0;
+    });
+
+    function updatePad(e) {
+        if (!padRect) return;
+        let x = (e.clientX - padRect.left) / padRect.width;
+        let y = (e.clientY - padRect.top) / padRect.height;
+        if (x < 0) x = 0; else if (x > 1) x = 1;
+        if (y < 0) y = 0; else if (y > 1) y = 1;
+        padX = x;
+        padY = y;
+    }
+
+    // Every slider seeds its own state and its own readout at init: the numbers in
+    // the markup are placeholders, not the source of truth.
+    function syncControls() {
+        volume = ($sVol.value | 0) / 100;
+        panBase = ($sPan.value | 0) / 100;
+        pitchBase = ($sPitch.value | 0) / 100;
+        holdRate = $sRate.value | 0;
+        dragRate = $sDrag.value | 0;
+        stressRate = $sStress.value | 0;
+        masterVol = ($sMaster.value | 0) / 100;
+        cutT = ($sCut.value | 0) / 100;
+        wetVal = ($sWet.value | 0) / 100;
+
+        $oVol.textContent = volume.toFixed(2);
+        $oPan.textContent = panBase.toFixed(2);
+        $oPitch.textContent = pitchBase.toFixed(2);
+        $oRate.textContent = holdRate + '/s';
+        $oDrag.textContent = dragRate > 0 ? dragRate + '/s' : 'tap';
+        $oStress.textContent = stressRate + '/s';
+        $oMaster.textContent = masterVol.toFixed(2);
+        $oCut.textContent = Math.round(cutHz(cutT)) + ' Hz';
+        $oWet.textContent = wetVal.toFixed(2);
+    }
+
+    syncControls();
+
+    // Keys: 1-6 sprite, space fire, esc stop all
+    window.addEventListener('keydown', (e) => {
+        if (!running) return;
+        if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLInputElement)) {
+            e.preventDefault();
+            holdOn = 1;
+            holdAcc = 0;
+            $fire.classList.add('on');
+            if (scene === 1) fireSteal();
+            else fireMain();
+            return;
+        }
+        if (e.code === 'Escape') {
+            stopEverything();
+            return;
+        }
+        const n = e.key.charCodeAt(0) - 49;              // '1' -> 0
+        if (e.key.length === 1 && n >= 0 && n < 6) selectSprite(n);
+    });
+    window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') releaseFire();
+    });
+    window.addEventListener('blur', releaseFire);
+</script>
+
+</body>
+</html>
