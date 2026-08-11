@@ -28,10 +28,20 @@ export class AudioPool {
      * @param {number} [capacity=32] - Max concurrent voices, 1..256 (see handle layout)
      * @param {AudioNode|null} [output=null] - Optional destination node (defaults to
      *   ctx.destination). Pass a GainNode to route the pool's voices into a bus.
-     * @throws {RangeError} if capacity does not fit the handle's channel field
-     * @throws {TypeError} if a sprite entry is malformed
+     * @param {Object} [options={}] - Construction options.
+     * @param {'stereo'|'positional'} [options.panner='stereo'] - Per-voice pan node.
+     *   'stereo' uses StereoPannerNode (pan -> .pan). 'positional' uses PannerNode
+     *   (pan -> .positionX): listener at origin facing -Z, so +X is right; distanceModel
+     *   'inverse' with refDistance 1 keeps every source at distance <= 1 (the whole pan
+     *   range, y=z=0) at gain exactly 1 - zero distance attenuation, loudness stays owned
+     *   by the gain node. Full 3D is set later via voiceNode(). Default is byte-identical
+     *   to prior releases.
+     * @throws {RangeError} if capacity does not fit the handle's channel field, or panner
+     *   mode is not 'stereo' or 'positional'
+     * @throws {TypeError} if a sprite entry is malformed, or positional mode is requested
+     *   against a context whose PannerNode lacks the positionX AudioParam interface
      */
-    constructor(audioContext, audioBuffer, spriteMap, capacity = 32, output = null) {
+    constructor(audioContext, audioBuffer, spriteMap, capacity = 32, output = null, options = {}) {
         if (!audioContext) throw new TypeError('AudioPool: audioContext is required');
         if (!spriteMap) throw new TypeError('AudioPool: spriteMap is required');
         if (!Number.isInteger(capacity) || capacity < 1 || capacity > MAX_CAPACITY) {
@@ -39,6 +49,12 @@ export class AudioPool {
                 'AudioPool: capacity must be an integer in [1, ' + MAX_CAPACITY + ']. Handles ' +
                 'pack the channel index into ' + CHANNEL_BITS + ' bits, so a larger pool would ' +
                 'alias channels onto each other.'
+            );
+        }
+        const mode = options.panner || 'stereo';
+        if (mode !== 'stereo' && mode !== 'positional') {
+            throw new RangeError(
+                'AudioPool: options.panner must be "stereo" or "positional", got "' + mode + '".'
             );
         }
         // Validated once, at construction: a typo in a sprite table should fail at the
@@ -58,6 +74,7 @@ export class AudioPool {
         this.spriteMap = spriteMap;
         this.capacity = capacity;
         this.output = output || audioContext.destination;
+        this.panMode = mode;
 
         // f64, not f32. These hold absolute AudioContext time, which only grows: a context
         // left open for a day reaches ~86400s, where f32 spacing is ~8ms - wider than most
@@ -68,19 +85,46 @@ export class AudioPool {
 
         this.gains = new Array(this.capacity);
         this.panners = new Array(this.capacity);
+        // The AudioParam play() writes per shot: stereo -> .pan, positional -> .positionX.
+        // Held separately so the hot path swaps the param SOURCE, never branches on mode.
+        this.panTargets = new Array(this.capacity);
         this.sources = new Array(this.capacity).fill(null);
 
         // Bound once, per pool - not once per play(). Assigning an arrow function
         // to source.onended inside play() would allocate a closure on every shot.
         this._onEnded = this._onEnded.bind(this);
 
+        // Branch ONCE on mode, at cold construction, never in play().
+        const positional = mode === 'positional';
         for (let i = 0; i < this.capacity; i++) {
             const gain = this.ctx.createGain();
-            const panner = this.ctx.createStereoPanner();
+            let panner, panTarget;
+            if (positional) {
+                panner = this.ctx.createPanner();
+                panner.panningModel = 'equalpower';
+                panner.distanceModel = 'inverse';
+                panner.refDistance = 1;
+                panner.maxDistance = 10000;
+                panner.rolloffFactor = 1;
+                if (i === 0 && panner.positionX === undefined) {
+                    // Fail closed: positional mode needs the positionX/Y/Z AudioParam
+                    // interface. A pre-AudioParam PannerNode (or a mock without it) would
+                    // silently drop every pan write - null is not zero.
+                    throw new TypeError(
+                        'AudioPool: positional mode requires a PannerNode with the ' +
+                        'positionX/Y/Z AudioParam interface; this context does not provide it.'
+                    );
+                }
+                panTarget = panner.positionX;
+            } else {
+                panner = this.ctx.createStereoPanner();
+                panTarget = panner.pan;
+            }
             panner.connect(gain);
             gain.connect(this.output);
             this.gains[i] = gain;
             this.panners[i] = panner;
+            this.panTargets[i] = panTarget;
         }
     }
 
@@ -103,6 +147,7 @@ export class AudioPool {
         // Cache property lookups (avoids repeated `this.` dereferences in hot path)
         const gains = this.gains;
         const panners = this.panners;
+        const panTargets = this.panTargets;
         const sources = this.sources;
         const expireTimes = this.expireTimes;
         const generations = this.generations;
@@ -118,7 +163,7 @@ export class AudioPool {
         }
 
         const gainNode = gains[bestChannel];
-        const panParam = panners[bestChannel].pan;
+        const panParam = panTargets[bestChannel];
         const startTime = now + START_LEAD;
 
         if (expireTimes[bestChannel] > now) {
@@ -160,7 +205,7 @@ export class AudioPool {
      * @param {number} handle - packed handle returned by play()
      */
     stop(handle) {
-        if (handle < 0) return;
+        if (!Number.isInteger(handle) || handle < 0) return;
         const channel = handle & CHANNEL_MASK;
         if (channel >= this.capacity) return;
         if (this.generations[channel] !== (handle >>> CHANNEL_BITS)) return;
@@ -175,11 +220,28 @@ export class AudioPool {
      * @returns {boolean}
      */
     isPlaying(handle) {
-        if (handle < 0) return false;
+        if (!Number.isInteger(handle) || handle < 0) return false;
         const channel = handle & CHANNEL_MASK;
         if (channel >= this.capacity) return false;
         if (this.generations[channel] !== (handle >>> CHANNEL_BITS)) return false;
         return this.expireTimes[channel] > this.ctx.currentTime;
+    }
+
+    /**
+     * The per-voice spatial node for a live handle, else null. This is the seam
+     * lite-audio uses to write 3D position (.positionX/Y/Z on a PannerNode) without
+     * reaching into pool internals. Cold, generation-checked, fail-closed: a stolen,
+     * stopped, expired, or bogus handle returns null, never a stale node.
+     * @param {number} handle - packed handle returned by play()
+     * @returns {PannerNode|StereoPannerNode|null}
+     */
+    voiceNode(handle) {
+        if (!Number.isInteger(handle) || handle < 0) return null;
+        const channel = handle & CHANNEL_MASK;
+        if (channel >= this.capacity) return null;
+        if (this.generations[channel] !== (handle >>> CHANNEL_BITS)) return null;
+        if (this.expireTimes[channel] <= this.ctx.currentTime) return null;
+        return this.panners[channel];
     }
 
     /**
@@ -248,6 +310,7 @@ export class AudioPool {
         }
 
         this.gains = this.panners = this.sources = null;
+        this.panTargets = null;                     // holds AudioParam refs
         this.expireTimes = null;
         this.generations = null;
         this.ctx = this.buffer = this.spriteMap = this.output = null;

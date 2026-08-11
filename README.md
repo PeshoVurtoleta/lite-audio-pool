@@ -1,6 +1,8 @@
 # @zakkster/lite-audio-pool
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-audio-pool.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-audio-pool)
+[![sponsor](https://img.shields.io/badge/sponsor-PeshoVurtoleta-ea4aaa.svg?logo=github)](https://github.com/sponsors/PeshoVurtoleta)
+![Zero-GC](https://img.shields.io/badge/Zero--GC-Engine-00C853?style=for-the-badge&logo=leaf&logoColor=white)
 [![npm bundle size](https://img.shields.io/bundlephobia/minzip/@zakkster/lite-audio-pool?style=for-the-badge)](https://bundlephobia.com/result?p=@zakkster/lite-audio-pool)
 [![npm downloads](https://img.shields.io/npm/dm/@zakkster/lite-audio-pool?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-audio-pool)
 [![npm total downloads](https://img.shields.io/npm/dt/@zakkster/lite-audio-pool?style=for-the-badge&color=blue)](https://www.npmjs.com/package/@zakkster/lite-audio-pool)
@@ -118,7 +120,7 @@ It's built for games, not apps.
 
 ## ⚙️ API
 
-### `new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?)`
+### `new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?, options?)`
 
 Creates a pool of pre-wired audio channels.
 
@@ -129,11 +131,23 @@ Creates a pool of pre-wired audio channels.
 | `spriteMap` | `Record<string, { start, duration }>` | — | Named slices into the buffer |
 | `capacity` | `number` | `32` | Max concurrent voices, integer in `[1, 256]`. Throws `RangeError` if outside that range — the handle packs the channel index into 8 bits, so 256 is the last slot the mask can address. |
 | `output` | `AudioNode \| null` | `ctx.destination` | Destination node. Pass a `GainNode` to route the pool through a bus. |
+| `options` | `{ panner?: 'stereo' \| 'positional' }` | `{}` | Per-voice pan node. See below. |
 
 The constructor validates its inputs eagerly. Missing `ctx` or `spriteMap`
 throws `TypeError`. A sprite entry lacking `duration`, or carrying a negative
 `start`, throws `TypeError` naming the offending sprite — typos fail at wiring,
 not as a silent `-1` the first time a playtester triggers them.
+
+**Panner mode.** `options.panner` defaults to `'stereo'` — each voice is a
+`StereoPannerNode` and the `pan` arg writes `.pan` (byte-identical to prior
+releases). Pass `{ panner: 'positional' }` and each voice becomes a `PannerNode`
+where `pan` writes `.positionX` instead: the listener sits at the origin facing
+`-Z`, so `+X` is right, and `pan -1..+1 -> positionX -1..+1` is directionally
+identical to stereo. With `distanceModel: 'inverse'` and `refDistance: 1` the
+whole pan range sits at distance `<= 1`, so there is zero distance attenuation —
+loudness stays owned by the gain node. Use [`voiceNode(handle)`](#voicenodehandle)
+to reach the `PannerNode` and set full 3D position later. An unknown mode throws
+`RangeError`; a `PannerNode` lacking the `positionX` AudioParam throws `TypeError`.
 
 ### `play(spriteId, volume?, pan?, pitch?, buffer?)`
 
@@ -172,6 +186,16 @@ Returns `true` iff the handle still names a sounding voice. `false` for a
 channel that was stolen, has played out, or was stopped. Runs the same guard
 `stop()` runs internally — so callers never have to read `generations[]` and
 `expireTimes[]` themselves.
+
+### `voiceNode(handle)`
+
+Returns the per-voice spatial node for a live handle, else `null`. In
+`'positional'` mode this is the voice's `PannerNode` — write `.positionX/Y/Z`
+on it to set full 3D position; in `'stereo'` mode it is a `StereoPannerNode`.
+Generation-checked and fail-closed like `stop()`: a stolen, stopped, expired,
+or bogus handle returns `null`, never a stale node. This is the seam
+`@zakkster/lite-audio` uses to write position without reaching into pool
+internals.
 
 ### `activeCount()`
 

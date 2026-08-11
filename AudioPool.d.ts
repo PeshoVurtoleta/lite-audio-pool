@@ -2,18 +2,22 @@ export class AudioPool {
     readonly capacity: number;
 
     /**
-     * @throws {TypeError} if audioContext or spriteMap is missing, or any sprite
-     *   entry lacks a finite `start >= 0` and `duration > 0`.
-     * @throws {RangeError} if capacity is not an integer in [1, 256]. The
+     * @throws {TypeError} if audioContext or spriteMap is missing, any sprite
+     *   entry lacks a finite `start >= 0` and `duration > 0`, or positional
+     *   mode is requested against a `PannerNode` without the `positionX`
+     *   AudioParam interface.
+     * @throws {RangeError} if capacity is not an integer in [1, 256] (the
      *   channel index is packed into 8 bits of the returned handle, so 256 is
-     *   the last slot the mask can address.
+     *   the last slot the mask can address), or `options.panner` is not
+     *   `'stereo'` or `'positional'`.
      */
     constructor(
         audioContext: AudioContext,
         audioBuffer: AudioBuffer,
         spriteMap: Record<string, { start: number; duration: number }>,
         capacity?: number,
-        output?: AudioNode | null
+        output?: AudioNode | null,
+        options?: { panner?: 'stereo' | 'positional' }
     );
 
     /**
@@ -41,6 +45,15 @@ export class AudioPool {
      * internally.
      */
     isPlaying(handle: number): boolean;
+
+    /**
+     * The per-voice spatial node for a live handle, else `null`. In
+     * `'positional'` mode this is a `PannerNode` (write `.positionX/Y/Z` on it
+     * to set full 3D position); in `'stereo'` mode a `StereoPannerNode`.
+     * Generation-checked and fail-closed: a stolen, stopped, expired, or bogus
+     * handle returns `null`, never a stale node.
+     */
+    voiceNode(handle: number): PannerNode | StereoPannerNode | null;
 
     /**
      * Voices currently sounding. Allocation-free; safe to call every frame.

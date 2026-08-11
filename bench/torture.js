@@ -20,6 +20,7 @@ import { AudioPool } from '../AudioPool.js';
 const noop = () => {};
 const staticGainParam = { value: 1, cancelScheduledValues: noop, setValueAtTime: noop, linearRampToValueAtTime: noop };
 const staticPanParam = { value: 0, cancelScheduledValues: noop, setValueAtTime: noop };
+const staticPosParam = { value: 0, cancelScheduledValues: noop, setValueAtTime: noop };
 const staticRateParam = { value: 1 };
 
 // One shared gain/panner shape reused per createGain/createStereoPanner call
@@ -32,8 +33,13 @@ function makeMockCtx() {
         _advance(dt) { currentTime += dt; },
         _reset() { currentTime = 0; },
         destination: {},
-        createGain: () => ({ gain: staticGainParam, connect: noop }),
-        createStereoPanner: () => ({ pan: staticPanParam, connect: noop }),
+        createGain: () => ({ gain: staticGainParam, connect: noop, disconnect: noop }),
+        createStereoPanner: () => ({ pan: staticPanParam, connect: noop, disconnect: noop }),
+        createPanner: () => ({
+            panningModel: '', distanceModel: '', refDistance: 0, maxDistance: 0, rolloffFactor: 0,
+            positionX: staticPosParam, positionY: staticPosParam, positionZ: staticPosParam,
+            connect: noop, disconnect: noop,
+        }),
         createBufferSource: () => ({
             buffer: null, playbackRate: staticRateParam,
             connect: noop, start: noop, stop: noop, onended: null,
@@ -89,11 +95,11 @@ function benchThroughput() {
 
 // ---------- Bench 2: allocation per play (requires --expose-gc) -----------
 
-function benchAllocation() {
+function benchAllocation(mode) {
     if (!global.gc) return null;
 
     const ctx = makeMockCtx();
-    const pool = new AudioPool(ctx, {}, sprites, 32);
+    const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: mode });
 
     // Warm up and settle heap
     for (let i = 0; i < 200_000; i++) {
@@ -117,6 +123,49 @@ function benchAllocation() {
 
     const delta = m1 - m0;
     return { N, delta, perPlay: delta / N };
+}
+
+// ---------- Bench 2b: create/destroy census (positional) ------------------
+// Build and destroy positional pools in a loop; retained heap must not grow.
+// NOTE on what this actually proves: the mock's connect() is a no-op, so it
+// never wires a real retaining edge from the (mock) output graph back to a
+// voice's gain/panner node. That means a *missing* disconnect() call here
+// would NOT show up as heap growth - the node would already be unreachable
+// (and collectible) the moment the pool itself is dropped at the end of the
+// loop body, disconnect() or not. This census is therefore proof of one
+// thing only: no *other* JS-heap-retained state (stray closures, arrays,
+// listeners, AudioParam refs left dangling on `this`) grows per build+destroy
+// cycle. The authoritative proof that destroy() actually calls disconnect()
+// on every PannerNode/GainNode it built - stereo and positional - lives in
+// test/AudioPool.test.js ('destroy disconnects every ...' tests), which use
+// a disconnect() counter mock precisely because a no-op-graph census cannot
+// catch that class of regression.
+function benchCensus() {
+    if (!global.gc) return null;
+
+    const WARM = 200;
+    for (let i = 0; i < WARM; i++) {
+        const ctx = makeMockCtx();
+        const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: 'positional' });
+        pool.play('laser');
+        pool.destroy();
+    }
+    global.gc(); global.gc();
+
+    const N = 2_000;
+    const m0 = process.memoryUsage().heapUsed;
+    for (let i = 0; i < N; i++) {
+        const ctx = makeMockCtx();
+        const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: 'positional' });
+        pool.play('laser');
+        pool.play('hit');
+        pool.destroy();
+    }
+    global.gc(); global.gc();
+    const m1 = process.memoryUsage().heapUsed;
+
+    const delta = m1 - m0;
+    return { N, delta, perCycle: delta / N };
 }
 
 // ---------- Bench 3: full-saturation steal loop ---------------------------
@@ -154,16 +203,43 @@ line('wall time', `${t.dt.toFixed(1)} ms`);
 line('rate',      `${fmt(Math.round(t.rate))} plays/sec`);
 
 heading('2. Retained allocation per play');
-const a = benchAllocation();
+const a = benchAllocation('stereo');
+const ap = benchAllocation('positional');
 if (a) {
-    const absPerPlay = Math.abs(a.perPlay);
-    const perPlayStr = absPerPlay < 1
-        ? `~0 B/play (delta ${fmt(a.delta)} B across ${fmt(a.N)} plays, within GC noise)`
-        : `${a.perPlay.toFixed(2)} B/play`;
+    const perPlayStr = (r) => Math.abs(r.perPlay) < 1
+        ? `~0 B/play (delta ${fmt(r.delta)} B across ${fmt(r.N)} plays, within GC noise)`
+        : `${r.perPlay.toFixed(2)} B/play`;
     line('plays',       fmt(a.N));
-    line('retained',    perPlayStr);
+    line('stereo',      perPlayStr(a));
+    line('positional',  perPlayStr(ap));
     line('note',        'the spec requires createBufferSource per play;');
     line('',            'the pool retains 32 source refs at any moment.');
+    // Positional play() must be zero-alloc, same as stereo: both ~0 B/play.
+    if (Math.abs(a.perPlay) >= 1 || Math.abs(ap.perPlay) >= 1) {
+        console.error('  FAIL: play() must be zero-alloc in both modes');
+        process.exitCode = 1;
+    }
+} else {
+    line('skipped',     're-run with --expose-gc');
+}
+
+heading('2b. Positional create/destroy census');
+const c = benchCensus();
+if (c) {
+    const perCycleStr = Math.abs(c.perCycle) < 64
+        ? `~0 B/cycle (delta ${fmt(c.delta)} B across ${fmt(c.N)} build+destroy cycles)`
+        : `${c.perCycle.toFixed(2)} B/cycle`;
+    line('cycles',      fmt(c.N));
+    line('retained',    perCycleStr);
+    // Sustained per-cycle heap growth here would mean the pool (or its arrays,
+    // closures, AudioParam refs) outlives destroy() - not that a node graph
+    // edge leaked (see the note above; the mock cannot observe that). 64
+    // B/cycle is GC-noise slack for 2000 short-lived allocations; real
+    // retention dwarfs it.
+    if (Math.abs(c.perCycle) >= 64) {
+        console.error('  FAIL: positional pools retain memory after destroy()');
+        process.exitCode = 1;
+    }
 } else {
     line('skipped',     're-run with --expose-gc');
 }

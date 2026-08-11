@@ -23,15 +23,21 @@ import { AudioPool } from '@zakkster/lite-audio-pool';
 
 ### Constructor
 ```
-new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?)
+new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?, options?)
 ```
 - `ctx: AudioContext` (required)
 - `audioBuffer: AudioBuffer` - default decoded sprite file
 - `spriteMap: Record<string, { start: number, duration: number }>` (required; validated)
 - `capacity?: number` - integer in [1, 256], defaults to 32. Out-of-range throws `RangeError`.
 - `output?: AudioNode | null` - defaults to `ctx.destination`. Pass a GainNode to route into a bus.
+- `options?: { panner?: 'stereo' | 'positional' }` - per-voice pan node. `'stereo'` (default)
+  uses StereoPannerNode, `pan` writes `.pan`. `'positional'` uses PannerNode, `pan` writes
+  `.positionX` (listener at origin facing -Z, so +X is right; distanceModel 'inverse' with
+  refDistance 1 gives zero distance attenuation across the pan range - loudness stays owned
+  by the gain node). Unknown value throws `RangeError`; a PannerNode lacking positionX throws
+  `TypeError`. Default is byte-identical to prior releases.
 
-Throws `TypeError` on missing ctx/spriteMap or malformed sprites. Throws `RangeError` on invalid capacity.
+Throws `TypeError` on missing ctx/spriteMap or malformed sprites. Throws `RangeError` on invalid capacity or panner mode.
 
 ### play(spriteId, volume?, pan?, pitch?, buffer?)
 Returns a packed handle `((gen << 8) | channel) >>> 0`, or `-1` if spriteId is unknown.
@@ -42,6 +48,12 @@ Returns a packed handle `((gen << 8) | channel) >>> 0`, or `-1` if spriteId is u
 
 ### stop(handle)
 Stops the specific play. Stale handles (channel stolen or already ended) are silent no-ops.
+
+### voiceNode(handle)
+Returns the per-voice spatial node for a live handle, else `null`. PannerNode in positional
+mode (write `.positionX/Y/Z` for full 3D), StereoPannerNode in stereo mode. Generation-checked
+and fail-closed like `stop()`: stolen, stopped, expired, or bogus handles return `null`. The
+seam lite-audio uses to set 3D position without reaching into pool internals.
 
 ### isPlaying(handle)
 Returns `true` iff the handle still names a sounding voice. Same test `stop()` runs internally.

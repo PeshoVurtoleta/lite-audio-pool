@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.2.0
+
+Positional audio, opt-in and cold-path only. This is Session S1 of the spatial
+roadmap: the pool gains a `PannerNode` voice mode and a seam for `@zakkster/lite-audio`
+to write 3D position without reaching into pool internals. No breaking changes;
+the default is byte-identical to 1.1.0.
+
+### Added
+
+- **`panner` construction mode** (constructor 6th arg `options.panner`). Defaults
+  to `'stereo'` (unchanged: each voice is a `StereoPannerNode`, `pan` writes `.pan`).
+  Pass `{ panner: 'positional' }` and each voice becomes a `PannerNode` where the
+  `pan` arg writes `.positionX` instead. An unknown value throws a `RangeError` at
+  construction; a context whose `PannerNode` lacks the `positionX` AudioParam throws
+  a `TypeError` (fail closed, not a silently dropped write).
+- **`voiceNode(handle)`**. Returns the per-voice spatial node for a live handle,
+  else `null`. Generation-checked and fail-closed exactly like `stop()`/`isPlaying()`:
+  a stolen, stopped, expired, or bogus handle returns `null`, never a stale node.
+  This is the seam `@zakkster/lite-audio` uses to set full 3D position (`.positionX/Y/Z`)
+  in a later session.
+
+### Hardened
+
+- **`voiceNode`/`stop`/`isPlaying` reject non-integer handles** (fail-closed;
+  `undefined`/`null`/`NaN` no longer alias to channel 0). The bitwise decode
+  coerced those to the bit pattern of handle `0` - a valid handle for the first
+  voice on channel 0 - so `stop(undefined)` on a fresh pool could kill a live
+  voice. The guard now runs `Number.isInteger(handle) && handle >= 0` first,
+  which accepts every real uint32 handle (including `0` and `-0`). The
+  `stop`/`isPlaying` hardening predates S1 but ships here.
+
+### Design note - why `pan -> positionX` in positional mode
+
+The listener defaults to the origin facing `-Z`, so `+X` is right; mapping
+`pan -1..+1 -> positionX -1..+1` is directionally identical to `StereoPanner`.
+With `distanceModel='inverse'` and `refDistance=1`, every source across the whole
+pan range (distance `<= 1`, `y=z=0`) has gain exactly `1` - zero distance
+attenuation and no distance-0 blowup (inverse clamps to gain 1 at/inside
+`refDistance`). Loudness therefore stays owned entirely by the gain node, and
+`play()` stays branch-free: the mode only swaps which AudioParam the hot path
+writes, decided once at construction.
+
+### Guarantee
+
+Default (`'stereo'`) construction is byte-identical to 1.1.0. The hot `play()`
+path gained no branch - it caches a `panTargets[]` param source that was chosen
+once, cold. Positional `play()` measures zero-alloc, same as stereo.
+
 ## 1.1.0
 
 Three additive features designed to make the pool composable inside a larger
