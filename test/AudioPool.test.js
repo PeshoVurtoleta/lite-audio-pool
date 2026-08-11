@@ -2,6 +2,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { AudioPool } from '../AudioPool.js';
 
 // ---- Web Audio mock: enough graph to observe scheduling and teardown ----
@@ -13,6 +14,17 @@ function mkCtx() {
         createGain: () => node('gain'),
         createStereoPanner: () => node('panner'),
         createPanner: () => pannerNode(),
+        createChannelMerger: (n) => {
+            const m = node('merger');
+            m.numberOfInputs = n;
+            return m;
+        },
+        createBiquadFilter: () => {
+            const b = node('biquad');
+            b.type = '';
+            b.frequency = param(350);
+            return b;
+        },
         createBufferSource: () => {
             const n = node('source');
             n.buffer = null;
@@ -39,9 +51,13 @@ function param(v) {
 let uid = 0;
 function node(kind) {
     const n = {
-        kind, id: uid++, out: [], disconnected: 0,
+        kind, id: uid++, out: [], connections: [], disconnected: 0,
         gain: param(1), pan: param(0),
-        connect: (t) => { n.out.push(t); return t; },
+        connect: (t, output, input) => {
+            n.out.push(t);
+            n.connections.push({ target: t, output, input });
+            return t;
+        },
         disconnect: () => { n.disconnected++; n.out.length = 0; },
     };
     return n;
@@ -403,6 +419,22 @@ test('destroy() tolerates a reentrant onended fired synchronously from source.st
     assert.doesNotThrow(() => p.destroy(), 'still idempotent after a reentrant teardown');
 });
 
+test('destroy() tolerates a reentrant onended in discrete mode (lane fan-out teardown)', () => {
+    const ctx = mkCtx();
+    // Discrete destroy() additionally walks voiceLanes[i] (an array-of-arrays) plus the
+    // shared merger/lowpass/_panSink. Prove that added teardown survives sources[] being
+    // mutated by a synchronous onended fired from inside the same stopAll() tick.
+    const p = new AudioPool(ctx, {}, MAP, 2, null, { panner: 'discrete', channels: 6 });
+    p.play('drone');
+    p.play('drone');
+    for (const src of p.sources) {
+        const originalStop = src.stop;
+        src.stop = (when) => { originalStop(when); if (src.onended) src.onended({ target: src }); };
+    }
+    assert.doesNotThrow(() => p.destroy());
+    assert.doesNotThrow(() => p.destroy(), 'still idempotent after a reentrant discrete teardown');
+});
+
 test('voiceNode works in stereo mode too', () => {
     const ctx = mkCtx();
     const p = new AudioPool(ctx, {}, MAP, 2);
@@ -433,4 +465,340 @@ test('default construction is unchanged: stereo panners, pan target is .pan', ()
     // Empty options object is equivalent to no options.
     const p2 = new AudioPool(ctx, {}, MAP, 4, null, {});
     assert.equal(p2.panMode, 'stereo');
+});
+
+// ---- 1.3.0 discrete surround mode -----------------------------------------
+
+test('stereo/positional voiceInputs are the panner node (byte-identical connect target)', () => {
+    const ctx = mkCtx();
+    const s = new AudioPool(ctx, {}, MAP, 4);
+    for (let i = 0; i < 4; i++) assert.equal(s.voiceInputs[i], s.panners[i], 'stereo voice ' + i);
+    const p = new AudioPool(ctx, {}, MAP, 4, null, { panner: 'positional' });
+    for (let i = 0; i < 4; i++) assert.equal(p.voiceInputs[i], p.panners[i], 'positional voice ' + i);
+    // The fresh source connects to the panner, exactly as before.
+    s.play('drone');
+    assert.equal(s.sources[0].out[0], s.panners[0], 'source -> panner in stereo');
+});
+
+test('discrete mode builds N lanes per voice, panner is null, source connects to the gain', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6 });
+    assert.equal(p.panMode, 'discrete');
+    assert.equal(p.channels, 6);
+    for (let i = 0; i < 4; i++) {
+        assert.equal(p.panners[i], null, 'voice ' + i + ' has no panner');
+        assert.equal(p.voiceLanes[i].length, 6, 'voice ' + i + ' has 6 lanes');
+        assert.equal(p.voiceInputs[i], p.gains[i], 'voice ' + i + ' input is its gain');
+        assert.equal(p.panTargets[i], p._panSink.gain, 'voice ' + i + ' pan target is the shared sink');
+    }
+    p.play('drone');
+    assert.equal(p.sources[0].out[0], p.gains[0], 'source -> gain in discrete');
+});
+
+test('discrete lane default gains: L,R = 0.7071, all others (incl LFE) = 0.0', () => {
+    const ctx = mkCtx();
+    for (const N of [4, 6, 8]) {
+        const p = new AudioPool(ctx, {}, MAP, 2, null, { panner: 'discrete', channels: N });
+        const lanes = p.voiceLanes[0];
+        assert.equal(lanes[0].gain.value, 0.7071, 'N=' + N + ' L audible');
+        assert.equal(lanes[1].gain.value, 0.7071, 'N=' + N + ' R audible');
+        for (let k = 2; k < N; k++) assert.equal(lanes[k].gain.value, 0.0, 'N=' + N + ' lane ' + k + ' silent');
+    }
+});
+
+test('discrete LFE topology: lane 3 -> shared lowpass -> merger input 3, once', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 3, null, { panner: 'discrete', channels: 6 });
+    assert.equal(p.lowpass.kind, 'biquad');
+    assert.equal(p.lowpass.type, 'lowpass');
+    assert.equal(p.merger.kind, 'merger');
+    assert.equal(p.merger.numberOfInputs, 6);
+    // The shared lowpass connects into merger input 3 exactly once, regardless of voices.
+    const lpToMerger = p.lowpass.connections.filter(c => c.target === p.merger);
+    assert.equal(lpToMerger.length, 1, 'lowpass -> merger exactly once');
+    assert.equal(lpToMerger[0].input, 3, 'lowpass targets merger input 3 (LFE)');
+    for (let i = 0; i < 3; i++) {
+        const lanes = p.voiceLanes[i];
+        // Lane 3 (LFE) routes to the shared lowpass, unpanned.
+        assert.equal(lanes[3].out[0], p.lowpass, 'voice ' + i + ' lane 3 -> lowpass');
+        // Every non-LFE lane routes straight to its own merger input k.
+        for (let k = 0; k < 6; k++) {
+            if (k === 3) continue;
+            const c = lanes[k].connections[0];
+            assert.equal(c.target, p.merger, 'voice ' + i + ' lane ' + k + ' -> merger');
+            assert.equal(c.input, k, 'voice ' + i + ' lane ' + k + ' -> merger input ' + k);
+        }
+        // The voice gain fans out to all N lanes.
+        for (let k = 0; k < 6; k++) assert.equal(p.gains[i].out.includes(lanes[k]), true, 'gain -> lane ' + k);
+    }
+    // Merger feeds the output bus.
+    assert.equal(p.merger.out[0], ctx.destination);
+});
+
+test('discrete pan is inert: play() writes land on the shared detached sink, not any lane', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 2, null, { panner: 'discrete', channels: 4 });
+    ctx.currentTime = 10;
+    p.play('drone', 1, -0.5);
+    const sink = p._panSink.gain;
+    const set = sink.events.filter(e => e[0] === 'set');
+    assert.equal(set.length, 1, 'one scheduled write, same shape as stereo');
+    assert.equal(set[0][1], -0.5, 'pan value lands on the sink');
+    assert.equal(set[0][2], 10.025, 'scheduled at startTime');
+    // Lane gains are untouched by pan writes.
+    for (let k = 0; k < 4; k++) {
+        assert.equal(p.voiceLanes[0][k].gain.events.length, 0, 'lane ' + k + ' pan-untouched');
+    }
+});
+
+test('discrete voiceNode returns the per-voice lane array, fail-closed like stereo', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 1, null, { panner: 'discrete', channels: 8 });
+    const h0 = p.play('drone');
+    const lanes = p.voiceNode(h0);
+    assert.equal(lanes, p.voiceLanes[0], 'live handle yields its lane array');
+    assert.equal(lanes.length, 8);
+    // The array identity is stable (pre-allocated, zero-alloc at call time).
+    assert.equal(p.voiceNode(h0), lanes, 'same array reference on repeat call');
+
+    ctx.currentTime = 0.5;
+    const h1 = p.play('drone');                   // steals ch0, bumps gen
+    assert.equal(p.voiceNode(h0), null, 'stale handle after steal returns null');
+    assert.equal(p.voiceNode(h1), p.voiceLanes[0], 'new occupant is live');
+
+    p.stop(h1);
+    assert.equal(p.voiceNode(h1), null, 'null after stop');
+    assert.equal(p.voiceNode(-1), null, 'negative handle');
+    assert.equal(p.voiceNode(9999), null, 'out-of-range channel');
+    assert.equal(p.voiceNode(NaN), null, 'non-integer handle');
+});
+
+test('discrete voiceNode fails closed on a voice expired but not yet retired', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 1, null, { panner: 'discrete', channels: 4 });
+    const h = p.play('tick');
+    assert.notEqual(p.voiceNode(h), null);
+    ctx.currentTime = 100;
+    assert.equal(p.voiceNode(h), null, 'expired voice returns null even before retire');
+});
+
+test('discrete validation: channels must be present and in {4,6,8}', () => {
+    const ctx = mkCtx();
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete' }), RangeError, 'absent channels');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 2 }), RangeError, 'channels=2');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 5 }), RangeError, 'channels=5');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6.0001 }), RangeError, 'non-integer');
+    assert.doesNotThrow(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 4 }));
+    assert.doesNotThrow(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 8 }));
+    // Boundary matrix additions: string coercion, 0, and NaN must not slip through
+    // the strict !== 4/6/8 comparison (a `==` typo would let '6' or 6.0 through).
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: '6' }), RangeError, 'channels="6" (string)');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 0 }), RangeError, 'channels=0');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: NaN }), RangeError, 'channels=NaN');
+});
+
+test('discrete validation: channels with a non-discrete mode throws RangeError', () => {
+    const ctx = mkCtx();
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { channels: 6 }), RangeError, 'stereo + channels');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'positional', channels: 6 }), RangeError, 'positional + channels');
+});
+
+test('discrete validation: context lacking createChannelMerger/createBiquadFilter throws TypeError', () => {
+    const noMerger = mkCtx();
+    delete noMerger.createChannelMerger;
+    assert.throws(() => new AudioPool(noMerger, {}, MAP, 4, null, { panner: 'discrete', channels: 6 }), TypeError);
+    const noBiquad = mkCtx();
+    delete noBiquad.createBiquadFilter;
+    assert.throws(() => new AudioPool(noBiquad, {}, MAP, 4, null, { panner: 'discrete', channels: 6 }), TypeError);
+});
+
+test('unknown panner mode still throws RangeError including against discrete typos', () => {
+    const ctx = mkCtx();
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'Discrete' }), RangeError);
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'surround51' }), RangeError);
+});
+
+test('discrete destroy() disconnects every lane, the merger, the lowpass, the sink, and is idempotent', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 3, null, { panner: 'discrete', channels: 6 });
+    p.play('drone');
+    p.play('tick');
+    const gains = p.gains.slice();
+    const lanes = p.voiceLanes.map(a => a.slice());
+    const merger = p.merger;
+    const lowpass = p.lowpass;
+    const sink = p._panSink;
+    p.destroy();
+    for (let i = 0; i < 3; i++) {
+        assert.equal(gains[i].disconnected, 1, 'gain ' + i);
+        for (let k = 0; k < 6; k++) assert.equal(lanes[i][k].disconnected, 1, 'voice ' + i + ' lane ' + k);
+    }
+    assert.equal(merger.disconnected, 1, 'merger');
+    assert.equal(lowpass.disconnected, 1, 'lowpass');
+    assert.equal(sink.disconnected, 1, 'pan sink');
+    assert.equal(p.voiceLanes, null, 'voiceLanes released');
+    assert.equal(p.merger, null, 'merger released');
+    assert.equal(p.lowpass, null, 'lowpass released');
+    assert.equal(p._panSink, null, 'pan sink released');
+    assert.equal(p.voiceInputs, null, 'voiceInputs released');
+    assert.doesNotThrow(() => p.destroy(), 'idempotent');
+});
+
+// ---- 1.3.0 QA hardening: node census, topology at N=4/8, and extra boundaries ----
+
+test('discrete node census exact: channels=6, capacity=32 -> 1 merger, 1 lowpass, ' +
+     '192 lane gains + 32 voice gains, 0 panners', () => {
+    const ctx = mkCtx();
+    let gainCalls = 0, mergerCalls = 0, biquadCalls = 0, stereoPannerCalls = 0, pannerCalls = 0;
+    const origGain = ctx.createGain, origMerger = ctx.createChannelMerger, origBiquad = ctx.createBiquadFilter;
+    const origStereo = ctx.createStereoPanner, origPanner = ctx.createPanner;
+    ctx.createGain = (...a) => { gainCalls++; return origGain(...a); };
+    ctx.createChannelMerger = (...a) => { mergerCalls++; return origMerger(...a); };
+    ctx.createBiquadFilter = (...a) => { biquadCalls++; return origBiquad(...a); };
+    ctx.createStereoPanner = (...a) => { stereoPannerCalls++; return origStereo(...a); };
+    ctx.createPanner = (...a) => { pannerCalls++; return origPanner(...a); };
+
+    const p = new AudioPool(ctx, {}, MAP, 32, null, { panner: 'discrete', channels: 6 });
+
+    assert.equal(mergerCalls, 1, 'exactly one ChannelMerger for the whole pool');
+    assert.equal(biquadCalls, 1, 'exactly one BiquadFilter (the shared LFE lowpass)');
+    assert.equal(gainCalls, 1 + 32 + 32 * 6, '1 detached pan sink + 32 voice gains + 6 lane gains x 32 voices');
+    assert.equal(gainCalls, 225, 'pinned literal: 1 + 32 + 192');
+    assert.equal(stereoPannerCalls, 0, 'discrete mode never builds a StereoPannerNode');
+    assert.equal(pannerCalls, 0, 'discrete mode never builds a 3D PannerNode');
+    assert.equal(p.panners.length, 32, 'panners array still sized to capacity');
+    assert.equal(p.panners.filter((x) => x !== null).length, 0, '0 live panner references');
+    assert.equal(p.voiceLanes[0].length, 6, 'voice 0 exposes exactly 6 pre-allocated lanes');
+});
+
+test('discrete node census exact: channels=4 (4 lane gains x 8 voices), 0 panners', () => {
+    const ctx = mkCtx();
+    let gainCalls = 0, mergerCalls = 0, biquadCalls = 0;
+    const origGain = ctx.createGain, origMerger = ctx.createChannelMerger, origBiquad = ctx.createBiquadFilter;
+    ctx.createGain = (...a) => { gainCalls++; return origGain(...a); };
+    ctx.createChannelMerger = (...a) => { mergerCalls++; return origMerger(...a); };
+    ctx.createBiquadFilter = (...a) => { biquadCalls++; return origBiquad(...a); };
+
+    const p = new AudioPool(ctx, {}, MAP, 8, null, { panner: 'discrete', channels: 4 });
+
+    assert.equal(mergerCalls, 1);
+    assert.equal(biquadCalls, 1);
+    assert.equal(gainCalls, 1 + 8 + 8 * 4, '1 detached pan sink + 8 voice gains + 4 lane gains x 8 voices');
+    assert.equal(p.voiceLanes[0].length, 4, 'channels=4 -> L,R,C,LFE only, no SL/SR');
+});
+
+test('discrete node census exact: channels=8 (8 lane gains x 5 voices), 0 panners', () => {
+    const ctx = mkCtx();
+    let gainCalls = 0, mergerCalls = 0, biquadCalls = 0;
+    const origGain = ctx.createGain, origMerger = ctx.createChannelMerger, origBiquad = ctx.createBiquadFilter;
+    ctx.createGain = (...a) => { gainCalls++; return origGain(...a); };
+    ctx.createChannelMerger = (...a) => { mergerCalls++; return origMerger(...a); };
+    ctx.createBiquadFilter = (...a) => { biquadCalls++; return origBiquad(...a); };
+
+    const p = new AudioPool(ctx, {}, MAP, 5, null, { panner: 'discrete', channels: 8 });
+
+    assert.equal(mergerCalls, 1);
+    assert.equal(biquadCalls, 1);
+    assert.equal(gainCalls, 1 + 5 + 5 * 8, '1 detached pan sink + 5 voice gains + 8 lane gains x 5 voices');
+    assert.equal(p.voiceLanes[0].length, 8, 'channels=8 adds SBL/SBR at lanes 6,7');
+});
+
+test('discrete LFE topology holds at channels=4 and channels=8 too, not just 6', () => {
+    const ctx = mkCtx();
+    for (const N of [4, 8]) {
+        const p = new AudioPool(ctx, {}, MAP, 2, null, { panner: 'discrete', channels: N });
+        assert.equal(p.merger.numberOfInputs, N, 'N=' + N + ' merger input count');
+        const lpToMerger = p.lowpass.connections.filter((c) => c.target === p.merger);
+        assert.equal(lpToMerger.length, 1, 'N=' + N + ' lowpass -> merger exactly once');
+        assert.equal(lpToMerger[0].input, 3, 'N=' + N + ' lowpass targets merger input 3 (LFE)');
+        for (let i = 0; i < 2; i++) {
+            const lanes = p.voiceLanes[i];
+            assert.equal(lanes.length, N, 'N=' + N + ' voice ' + i + ' lane count');
+            assert.equal(lanes[3].out[0], p.lowpass, 'N=' + N + ' voice ' + i + ' lane 3 -> lowpass');
+            for (let k = 0; k < N; k++) {
+                if (k === 3) continue;
+                const c = lanes[k].connections[0];
+                assert.equal(c.target, p.merger, 'N=' + N + ' voice ' + i + ' lane ' + k + ' -> merger');
+                assert.equal(c.input, k, 'N=' + N + ' voice ' + i + ' lane ' + k + ' -> merger input ' + k);
+            }
+        }
+        // channels=8 specifically exercises SBL/SBR at lanes 6 and 7.
+        if (N === 8) {
+            const lanes = p.voiceLanes[0];
+            assert.equal(lanes[6].connections[0].input, 6, 'SBL (lane 6) -> merger input 6');
+            assert.equal(lanes[7].connections[0].input, 7, 'SBR (lane 7) -> merger input 7');
+        }
+    }
+});
+
+test('discrete: writing every VBAP (non-LFE) lane leaves the LFE lane at 0, never in the VBAP set', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 1, null, { panner: 'discrete', channels: 6 });
+    const h = p.play('drone');
+    const lanes = p.voiceNode(h);
+    // Simulate a full VBAP placement: drive every non-LFE lane to a nonzero gain.
+    for (let k = 0; k < lanes.length; k++) {
+        if (k === 3) continue;
+        lanes[k].gain.value = 0.5;
+    }
+    assert.equal(lanes[3].gain.value, 0.0, 'LFE lane (index 3) is never written by a VBAP pass');
+});
+
+test('discrete: the shared lowpass is one instance, referenced identically by every voice', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 5, null, { panner: 'discrete', channels: 6 });
+    const refs = new Set();
+    for (let i = 0; i < 5; i++) refs.add(p.voiceLanes[i][3].out[0]);
+    assert.equal(refs.size, 1, 'all 5 voices route lane 3 to the exact same lowpass instance');
+    assert.equal(refs.has(p.lowpass), true, 'that instance is the pool-level p.lowpass');
+});
+
+test('discrete: the detached pan sink is never connected to anything, before or after play()', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6 });
+    assert.equal(p._panSink.out.length, 0, '_panSink has no connect() targets at construction');
+    p.play('drone');
+    p.play('tick');
+    assert.equal(p._panSink.out.length, 0, '_panSink stays unconnected after pan writes to its gain param');
+});
+
+test('discrete lane defaults survive play(): a freshly played, unpositioned voice is front-stereo, ' +
+     'never fully silent', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 1, null, { panner: 'discrete', channels: 6 });
+    const h = p.play('drone');                    // no positioning write after play()
+    const lanes = p.voiceNode(h);
+    assert.equal(lanes[0].gain.value, 0.7071, 'L still audible after play()');
+    assert.equal(lanes[1].gain.value, 0.7071, 'R still audible after play()');
+    for (let k = 2; k < 6; k++) assert.equal(lanes[k].gain.value, 0.0, 'lane ' + k + ' still silent after play()');
+});
+
+test('discrete voiceNode boundary matrix: undefined, null, non-integer floats (+/-), fail closed; ' +
+     '-0 resolves like 0', () => {
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6 });
+    const h0 = p.play('drone');                   // channel 0, generation 0
+    assert.equal(h0, 0, 'sanity: channel 0 is live at generation 0');
+
+    for (const bogus of [undefined, null, 1.5, -1.5, -1]) {
+        assert.equal(p.voiceNode(bogus), null, 'voiceNode(' + String(bogus) + ') must fail closed in discrete mode');
+    }
+    // -0 decodes to the same (gen 0, channel 0) bit pattern as the legitimate handle 0.
+    assert.equal(p.voiceNode(-0), p.voiceLanes[0], 'voiceNode(-0) resolves the live channel-0 lane array');
+    assert.equal(p.voiceNode(0), p.voiceLanes[0], 'voiceNode(0) resolves identically');
+});
+
+test('hot play() body never branches on panner mode (structural pin against regression)', () => {
+    // A `panMode`/`discrete` test anywhere inside play() would mean the "unbranched
+    // hot path" claim regressed silently; this fails loudly on that exact class of
+    // change instead of relying on someone noticing a benchmark wobble.
+    const src = readFileSync(new URL('../AudioPool.js', import.meta.url), 'utf8');
+    const start = src.indexOf('play(spriteId, volume = 1.0');
+    const end = src.indexOf('stop(handle) {');
+    assert.ok(start > -1, 'sanity: play() method located');
+    assert.ok(end > start, 'sanity: stop() method located after play()');
+    const body = src.slice(start, end);
+    assert.doesNotMatch(body, /discrete/i, 'play() must not reference "discrete" anywhere in its body');
+    assert.doesNotMatch(body, /panMode/, 'play() must not read this.panMode');
+    assert.doesNotMatch(body, /voiceLanes/, 'play() must not touch voiceLanes; it uses pre-resolved voiceInputs');
 });

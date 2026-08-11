@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.3.0
+
+Discrete surround, opt-in and cold-path only. This is Session S2 of the spatial
+roadmap: the pool gains a `panner: 'discrete'` voice mode that fans each voice
+through pre-allocated per-channel GainNode lanes into a shared `ChannelMerger`.
+No breaking changes; the default (and every prior mode) is byte-identical to 1.2.0.
+
+### Added
+
+- **`panner: 'discrete'` construction mode** with a required `channels` in `{4, 6, 8}`
+  (4 = L,R,C,LFE; 6 = +SL,SR; 8 = +SBL,SBR). Each voice routes
+  `source -> gain -> N lane GainNodes -> ChannelMerger(N) -> output`. Lane index 3
+  (LFE) is band-limited through ONE shared lowpass per pool, summed pool-wide, then
+  fed into merger input 3. All other lanes connect straight to their merger input k.
+- **Lane default gains.** L and R (lanes 0,1) default to `0.7071`; every other lane,
+  including LFE, defaults to `0.0`. An unpositioned discrete voice therefore plays
+  front-stereo and is never silent.
+- **`voiceNode()` returns the per-voice lane array in discrete mode** - a pre-allocated
+  `Array(N)` of the lane GainNodes (write `.gain.value` on lane k to place the voice).
+  The array is built once at construction, so the call allocates nothing. Stereo and
+  positional modes still return their single node. The existing generation +
+  `Number.isInteger` fail-closed guards are unchanged.
+
+### Design note - inert pan and shared LFE
+
+In discrete mode the `pan` arg is INERT: it lands on a single detached per-pool
+`GainNode` (`_panSink`) that is never connected to anything, so the hot `play()` path
+keeps the exact one-event-per-play shape it has in stereo/positional - no new branch,
+no new bytes. Placement is done through the lane array from `voiceNode()`, not `pan`.
+LFE is one lowpass for the whole pool, fed per-voice through lane 3, so surround
+voices share a single band-limited sub bus rather than one filter per voice.
+
+### Fail-closed validation
+
+- `panner` now accepts `'stereo'|'positional'|'discrete'`; anything else throws `RangeError`.
+- `'discrete'` without a `channels` value in `{4,6,8}` (absent, non-integer, or out of set)
+  throws `RangeError`.
+- `channels` passed with a non-discrete `panner` throws `RangeError`.
+- `'discrete'` against a context lacking `createChannelMerger` or `createBiquadFilter`
+  throws `TypeError` - the surround graph cannot be silently half-built.
+- `destroy()` is now null-safe for discrete voices (which carry no `PannerNode`): it
+  disconnects every lane gain, the shared merger, the shared lowpass, the pan sink, the
+  voice gains, and any live sources, and only calls `panners[i].disconnect()` when the
+  panner is non-null. Still idempotent.
+
+### Guarantee
+
+Default (`'stereo'`) construction - and `'positional'` - remains byte-identical to 1.2.0.
+The only hot-body edit is the source-connect target, pre-resolved once per mode into a
+`voiceInputs[]` array (panner for stereo/positional, gain for discrete); `play()` gained
+no branch. All three modes measure zero-alloc per play, and 4096 discrete build+destroy
+cycles leave a node census tracker at 0 (proven with an asserted red control).
+
 ## 1.2.0
 
 Positional audio, opt-in and cold-path only. This is Session S1 of the spatial
@@ -51,7 +104,7 @@ once, cold. Positional `play()` measures zero-alloc, same as stereo.
 ## 1.1.0
 
 Three additive features designed to make the pool composable inside a larger
-Web Audio graph — specifically, to serve as the SFX voice layer for the
+Web Audio graph -- specifically, to serve as the SFX voice layer for the
 upcoming `@zakkster/lite-audio` engine. No breaking changes to existing
 signatures; the 4-arg `new AudioPool(ctx, buf, sprites, cap)` constructor and
 the single-play-then-stop opaque-handle usage keep working identically.
@@ -70,13 +123,13 @@ the single-play-then-stop opaque-handle usage keep working identically.
   decodes and checks the generation; a stale handle whose channel has been
   stolen or naturally ended is a silent no-op instead of a wrong-voice hit.
   For the first play on a virgin channel `gen === 0`, so the returned handle
-  equals the channel index — legacy code that treats the return value opaquely
+  equals the channel index -- legacy code that treats the return value opaquely
   (get X from play, pass X to stop) keeps working with no changes.
 - **`isPlaying(handle)`**. Answers the exact question `stop()` answers
   internally: does this handle still name a sounding voice? Returns `false` for
   a channel that was stolen, stopped, or has played out. Without it, callers
   that want to know whether their shot survived have to read `generations[]`
-  and `expireTimes[]` and reimplement the guard — which means the guard now
+  and `expireTimes[]` and reimplement the guard -- which means the guard now
   lives in two places and can drift.
 - **`activeCount()`**. Live voice count, allocation-free, safe to call per
   frame. The number every HUD, mixer, and ducking rule wants.
@@ -87,7 +140,7 @@ the single-play-then-stop opaque-handle usage keep working identically.
   which turned "I asked for 512 voices" into "you have 256 and no idea why".
   Out-of-range or non-integer capacity now throws a `RangeError` naming the
   reason: the handle packs the channel index into 8 bits, so 256 is the last
-  index the mask can address. The bound is no longer a loose number either —
+  index the mask can address. The bound is no longer a loose number either --
   `CHANNEL_BITS` is the single source of truth and `MAX_CAPACITY` derives from
   it, so widening the channel field cannot desync the limit from the mask that
   decodes it.
@@ -100,7 +153,7 @@ the single-play-then-stop opaque-handle usage keep working identically.
 
 - **Voice expiry lost precision as the context aged.** `expireTimes` was an
   `Float32Array` holding *absolute* `AudioContext.currentTime`, which only ever
-  grows. At 24 hours of uptime (~86400s) f32 spacing is roughly 8ms — wider
+  grows. At 24 hours of uptime (~86400s) f32 spacing is roughly 8ms -- wider
   than a footstep, a UI click, or any short sprite. Expiry comparisons would
   start rounding voices alive or dead, and the "pick the channel that expires
   soonest" scan would pick badly. Promoted to `Float64Array`: 8 bytes x 256
@@ -143,7 +196,7 @@ the single-play-then-stop opaque-handle usage keep working identically.
   function allocated one closure per `play()`; the only remaining per-play
   allocation is the `AudioBufferSourceNode` itself, which is one-shot by spec.
   The handler locates its channel by identity scan over `sources` rather than
-  by a captured index — O(capacity) on a cold path (once per voice, off the
+  by a captured index -- O(capacity) on a cold path (once per voice, off the
   frame loop), and the scan *is* the ABA guard.
 
 ### Tooling
@@ -155,14 +208,14 @@ the single-play-then-stop opaque-handle usage keep working identically.
   Howler.js and lite-audio-pool on a real Web Audio backend with an
   identical synthesized sprite atlas.
 - New `demo/index.html`: single-file oscilloscope demo, four scenes.
-  **scope** — rising-edge-triggered `AnalyserNode` trace, log spectrum, and an
+  **scope** -- rising-edge-triggered `AnalyserNode` trace, log spectrum, and an
   atlas map strip drawn from the decoded buffer's own envelope with the sprite
-  regions overlaid (click a region to play it). **steal** — a small pool fed a
+  regions overlaid (click a region to play it). **steal** -- a small pool fed a
   2s sprite, with a live handle table showing each handle's channel,
   generation, and status; pressing `stop` on a stolen handle demonstrates the
-  guarded no-op while the channel keeps sounding. **field** — an XY pad
+  guarded no-op while the channel keeps sounding. **field** -- an XY pad
   driving pan and pitch, and bus rewiring (direct / lowpass / convolver) that
-  moves all voices at once without the pool knowing. **stress** — a 0-600
+  moves all voices at once without the pool knowing. **stress** -- a 0-600
   plays/s firehose against a 256-frame frame-time ring. Voice matrices are
   canvas-drawn, so nothing in the frame loop touches the DOM.
 - Test runner migrated from `vitest` to `node:test` (zero devDeps).

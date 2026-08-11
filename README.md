@@ -10,31 +10,31 @@
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-## 🎧 What is lite-audio-pool?
+## What is lite-audio-pool?
 
 `@zakkster/lite-audio-pool` is a zero-allocation, pre-wired, high-performance Web Audio sound system designed for real-time games.
 
 It gives you:
 
-- 🔊 32+ concurrent voices
-- ⚡ O(1) channel reuse
-- 🔄 Voice stealing with 20ms anti-pop fade
-- 🎚️ Volume, pan, and pitch per sound
-- 🧩 Sprite-based audio (single buffer, many sounds)
-- 🧼 Zero garbage collection during gameplay
-- 🪶 ~2 KB minified, < 1 KB gzipped
+- 32+ concurrent voices
+- O(1) channel reuse
+- Voice stealing with 20ms anti-pop fade
+- Volume, pan, and pitch per sound
+- Sprite-based audio (single buffer, many sounds)
+- Zero garbage collection during gameplay
+- ~2 KB minified, < 1 KB gzipped
 
-It's the opposite of a big audio framework — it's a tiny, raw, predictable tool that gives you full control without overhead.
+It's the opposite of a big audio framework -- it's a tiny, raw, predictable tool that gives you full control without overhead.
 
-Part of the [@zakkster/lite-*](https://www.npmjs.com/org/zakkster) ecosystem — micro-libraries built for deterministic, cache-friendly game development.
+Part of the [@zakkster/lite-*](https://www.npmjs.com/org/zakkster) ecosystem -- micro-libraries built for deterministic, cache-friendly game development.
 
-## 🚀 Install
+## Install
 
 ```bash
 npm i @zakkster/lite-audio-pool
 ```
 
-## 🕹️ Quick Start
+## Quick Start
 
 ```javascript
 import { AudioPool } from '@zakkster/lite-audio-pool';
@@ -90,7 +90,7 @@ multiple sprite atlases share one pool's voice budget:
 pool.play('laser', 1.0, 0.0, 1.0, alternateAtlas);
 ```
 
-## 🧠 Why This Exists
+## Why This Exists
 
 Most JS audio libraries:
 
@@ -98,7 +98,7 @@ Most JS audio libraries:
 - create garbage on every play
 - cause audio pops when stealing voices
 - hide Web Audio behind abstractions
-- weigh 10–40 KB
+- weigh 10-40 KB
 
 lite-audio-pool does the opposite:
 
@@ -110,7 +110,7 @@ lite-audio-pool does the opposite:
 
 It's built for games, not apps.
 
-## 📊 Comparison
+## Comparison
 
 | Library | Size | Allocations | Voice Stealing | Pitch | Pan | Use Case |
 |---------|------|-------------|----------------|-------|-----|----------|
@@ -118,7 +118,7 @@ It's built for games, not apps.
 | pizzicato | ~12 KB | Medium | No | Yes | Yes | Effects chains |
 | **lite-audio-pool** | **~2 KB / <1 KB gz** | **Zero** | **Yes (anti-pop)** | **Yes** | **Yes** | **Games, SFX, sprites** |
 
-## ⚙️ API
+## API
 
 ### `new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?, options?)`
 
@@ -126,25 +126,25 @@ Creates a pool of pre-wired audio channels.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ctx` | `AudioContext` | — | Your Web Audio context |
-| `audioBuffer` | `AudioBuffer` | — | Default decoded sprite file |
-| `spriteMap` | `Record<string, { start, duration }>` | — | Named slices into the buffer |
-| `capacity` | `number` | `32` | Max concurrent voices, integer in `[1, 256]`. Throws `RangeError` if outside that range — the handle packs the channel index into 8 bits, so 256 is the last slot the mask can address. |
+| `ctx` | `AudioContext` | -- | Your Web Audio context |
+| `audioBuffer` | `AudioBuffer` | -- | Default decoded sprite file |
+| `spriteMap` | `Record<string, { start, duration }>` | -- | Named slices into the buffer |
+| `capacity` | `number` | `32` | Max concurrent voices, integer in `[1, 256]`. Throws `RangeError` if outside that range -- the handle packs the channel index into 8 bits, so 256 is the last slot the mask can address. |
 | `output` | `AudioNode \| null` | `ctx.destination` | Destination node. Pass a `GainNode` to route the pool through a bus. |
 | `options` | `{ panner?: 'stereo' \| 'positional' }` | `{}` | Per-voice pan node. See below. |
 
 The constructor validates its inputs eagerly. Missing `ctx` or `spriteMap`
 throws `TypeError`. A sprite entry lacking `duration`, or carrying a negative
-`start`, throws `TypeError` naming the offending sprite — typos fail at wiring,
+`start`, throws `TypeError` naming the offending sprite -- typos fail at wiring,
 not as a silent `-1` the first time a playtester triggers them.
 
-**Panner mode.** `options.panner` defaults to `'stereo'` — each voice is a
+**Panner mode.** `options.panner` defaults to `'stereo'` -- each voice is a
 `StereoPannerNode` and the `pan` arg writes `.pan` (byte-identical to prior
 releases). Pass `{ panner: 'positional' }` and each voice becomes a `PannerNode`
 where `pan` writes `.positionX` instead: the listener sits at the origin facing
 `-Z`, so `+X` is right, and `pan -1..+1 -> positionX -1..+1` is directionally
 identical to stereo. With `distanceModel: 'inverse'` and `refDistance: 1` the
-whole pan range sits at distance `<= 1`, so there is zero distance attenuation —
+whole pan range sits at distance `<= 1`, so there is zero distance attenuation --
 loudness stays owned by the gain node. Use [`voiceNode(handle)`](#voicenodehandle)
 to reach the `PannerNode` and set full 3D position later. An unknown mode throws
 `RangeError`; a `PannerNode` lacking the `positionX` AudioParam throws `TypeError`.
@@ -157,20 +157,20 @@ ABA-safe stopping. Returns `-1` if the sprite ID is invalid.
 
 | Parameter | Type | Default | Range | Description |
 |-----------|------|---------|-------|-------------|
-| `spriteId` | `string` | — | — | Key from your sprite map |
-| `volume` | `number` | `1.0` | 0–∞ | Gain multiplier |
+| `spriteId` | `string` | -- | -- | Key from your sprite map |
+| `volume` | `number` | `1.0` | 0-inf | Gain multiplier |
 | `pan` | `number` | `0.0` | -1 to 1 | Stereo position (clamped) |
-| `pitch` | `number` | `1.0` | 0–∞ | Playback rate (2 = octave up) |
-| `buffer` | `AudioBuffer \| null` | `this.buffer` | — | Optional per-play buffer override |
+| `pitch` | `number` | `1.0` | 0-inf | Playback rate (2 = octave up) |
+| `buffer` | `AudioBuffer \| null` | `this.buffer` | -- | Optional per-play buffer override |
 
 If all channels are busy, the oldest channel is stolen with a 20ms anti-pop
 fade-out before the new sound starts. **When a channel is stolen, its old
-handle immediately goes stale** — a subsequent `stop(oldHandle)` becomes a
+handle immediately goes stale** -- a subsequent `stop(oldHandle)` becomes a
 silent no-op instead of stopping the new (wrong) voice.
 
 For the first play on a virgin channel, `generation === 0`, so the returned
 handle equals the channel index. Code that treats the return value as an
-opaque token (`stop(pool.play(id))`) keeps working across the v1.0 → v1.1
+opaque token (`stop(pool.play(id))`) keeps working across the v1.0 -> v1.1
 upgrade with no changes.
 
 ### `stop(handle)`
@@ -184,13 +184,13 @@ Stops the play identified by `handle` with a 20ms fade.
 
 Returns `true` iff the handle still names a sounding voice. `false` for a
 channel that was stolen, has played out, or was stopped. Runs the same guard
-`stop()` runs internally — so callers never have to read `generations[]` and
+`stop()` runs internally -- so callers never have to read `generations[]` and
 `expireTimes[]` themselves.
 
 ### `voiceNode(handle)`
 
 Returns the per-voice spatial node for a live handle, else `null`. In
-`'positional'` mode this is the voice's `PannerNode` — write `.positionX/Y/Z`
+`'positional'` mode this is the voice's `PannerNode` -- write `.positionX/Y/Z`
 on it to set full 3D position; in `'stereo'` mode it is a `StereoPannerNode`.
 Generation-checked and fail-closed like `stop()`: a stolen, stopped, expired,
 or bogus handle returns `null`, never a stale node. This is the seam
@@ -211,7 +211,7 @@ invalidated. Useful for scene transitions or pause screens.
 ### `destroy()`
 
 Stops every sound, `disconnect()`s every node the pool built from the
-`output` bus, and releases references. Idempotent — calling it twice is safe.
+`output` bus, and releases references. Idempotent -- calling it twice is safe.
 Use this when rebuilding a pool (capacity change, scene teardown) so the old
 voices don't linger on the graph.
 
@@ -227,7 +227,7 @@ voices don't linger on the graph.
 
 Each entry defines a time slice within the single `AudioBuffer`. The `start` is in seconds from the beginning of the buffer, `duration` is the length in seconds.
 
-## 🧪 Benchmark
+## Benchmark
 
 Numbers from `bench/torture.js` (Node 22, linux/x64, run with `--expose-gc`,
 median of 5 runs, mock `AudioContext` so the harness measures the pool's own
@@ -256,7 +256,7 @@ npx serve .
 # open http://localhost:3000/bench/torture.html
 ```
 
-**Framing this fairly:** Howler.js is a full-service audio library — it does
+**Framing this fairly:** Howler.js is a full-service audio library -- it does
 decoding, HTML5 Audio fallback, format detection across MP3/OGG/WAV/M4A,
 streaming, spatial audio, and much more that lite-audio-pool intentionally
 does not touch. lite-audio-pool covers exactly one narrow slice:
@@ -264,20 +264,20 @@ pre-wired sprite dispatch with voice stealing for real-time games. The bench
 measures both libraries on that one slice; the numbers are not a verdict on
 either project, just a data point for picking the right tool for a given job.
 
-## 🎧 Live demo
+## Live demo
 
 `demo/index.html` is a single-file oscilloscope-themed demo, four scenes:
 
-- **scope** — rising-edge-triggered `AnalyserNode` trace, log spectrum, and an
+- **scope** -- rising-edge-triggered `AnalyserNode` trace, log spectrum, and an
   atlas map strip drawn from the decoded buffer's envelope with sprite regions
   overlaid (click a region to play it).
-- **steal** — a small pool fed a 2-second sprite, with a live handle table
+- **steal** -- a small pool fed a 2-second sprite, with a live handle table
   showing each handle's channel, generation, and status. Pressing `stop` on a
   stolen handle demonstrates the guarded no-op while the channel keeps
   sounding.
-- **field** — XY pad driving pan and pitch, plus bus rewiring (direct /
+- **field** -- XY pad driving pan and pitch, plus bus rewiring (direct /
   lowpass / convolver) that moves all voices at once without the pool knowing.
-- **stress** — 0–600 plays/s firehose against a 256-frame frame-time ring.
+- **stress** -- 0-600 plays/s firehose against a 256-frame frame-time ring.
 
 Voice matrices are canvas-drawn; nothing in the frame loop touches the DOM.
 
@@ -286,42 +286,42 @@ npx serve .
 # open http://localhost:3000/demo/
 ```
 
-## 🔧 Internal Architecture
+## Internal Architecture
 
 ```
-                ┌─────────────────────────────────┐
-                │         AudioPool               │
-                │                                 │
-  play('laser') │  ┌─ Channel 0 ──────────────┐  │
-  ─────────────►│  │ StereoPanner → GainNode ──┤──┼──► ctx.destination
-                │  │ BufferSource ─►           │  │
-                │  └───────────────────────────┘  │
-                │  ┌─ Channel 1 ──────────────┐  │
-                │  │ StereoPanner → GainNode ──┤──┤
-                │  │ BufferSource ─►           │  │
-                │  └───────────────────────────┘  │
-                │  ...                            │
-                │  ┌─ Channel N ──────────────┐  │
-                │  │ StereoPanner → GainNode ──┤──┤
-                │  │ BufferSource ─►           │  │
-                │  └───────────────────────────┘  │
-                │                                 │
-                │  expireTimes: Float64Array(N)   │
-                │  generations: Uint32Array(N)    │
-                │  sources:     Array(N)          │
-                └─────────────────────────────────┘
+                +---------------------------------+
+                |         AudioPool               |
+                |                                 |
+  play('laser') |  +- Channel 0 --------------+   |
+  ------------->|  | StereoPanner -> GainNode -+---+--> ctx.destination
+                |  | BufferSource ->          |   |
+                |  +--------------------------+   |
+                |  +- Channel 1 --------------+   |
+                |  | StereoPanner -> GainNode -+---+
+                |  | BufferSource ->          |   |
+                |  +--------------------------+   |
+                |  ...                            |
+                |  +- Channel N --------------+   |
+                |  | StereoPanner -> GainNode -+---+
+                |  | BufferSource ->          |   |
+                |  +--------------------------+   |
+                |                                 |
+                |  expireTimes: Float64Array(N)   |
+                |  generations: Uint32Array(N)    |
+                |  sources:     Array(N)          |
+                +---------------------------------+
 
 GainNode and StereoPanner are pre-wired at construction.
 Only BufferSource is created per play (required by Web Audio spec).
-Voice stealing: oldest channel → 20ms gain ramp to 0.0001 → stop → new source.
+Voice stealing: oldest channel -> 20ms gain ramp to 0.0001 -> stop -> new source.
 Handles are (generation << 8) | channel, ABA-safe under stealing.
 ```
 
-## 📦 TypeScript
+## TypeScript
 
 Full TypeScript declarations included in `AudioPool.d.ts`.
 
-## 📚 LLM-Friendly Documentation
+## LLM-Friendly Documentation
 
 See `llms.txt` for AI-optimized metadata and usage examples.
 

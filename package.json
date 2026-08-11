@@ -1,21 +1,25 @@
 {
   "name": "@zakkster/lite-audio-pool",
-  "version": "1.2.0",
-  "description": "Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo or positional pan.",
+  "version": "1.3.0",
+  "description": "Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo, positional, or discrete surround pan.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
   "type": "module",
-  "main": "AudioPool.js",
-  "types": "AudioPool.d.ts",
+  "main": "./AudioPool.js",
+  "types": "./AudioPool.d.ts",
+  "module": "./AudioPool.js",
   "exports": {
     ".": {
+      "types": "./AudioPool.d.ts",
+      "node": "./AudioPool.js",
       "import": "./AudioPool.js",
-      "types": "./AudioPool.d.ts"
+      "default": "./AudioPool.js"
     }
   },
   "files": [
     "AudioPool.js",
     "AudioPool.d.ts",
+    "README.md",
     "llms.txt",
     "CHANGELOG.md"
   ],

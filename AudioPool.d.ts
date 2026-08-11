@@ -1,15 +1,21 @@
+// Package version, in lockstep with package.json + llms.txt (three-place sync).
+export const VERSION: string;
+
 export class AudioPool {
     readonly capacity: number;
 
     /**
      * @throws {TypeError} if audioContext or spriteMap is missing, any sprite
-     *   entry lacks a finite `start >= 0` and `duration > 0`, or positional
-     *   mode is requested against a `PannerNode` without the `positionX`
-     *   AudioParam interface.
+     *   entry lacks a finite `start >= 0` and `duration > 0`, positional mode
+     *   is requested against a `PannerNode` without the `positionX` AudioParam
+     *   interface, or `'discrete'` mode is requested against a context lacking
+     *   `createChannelMerger` / `createBiquadFilter`.
      * @throws {RangeError} if capacity is not an integer in [1, 256] (the
      *   channel index is packed into 8 bits of the returned handle, so 256 is
-     *   the last slot the mask can address), or `options.panner` is not
-     *   `'stereo'` or `'positional'`.
+     *   the last slot the mask can address); `options.panner` is not
+     *   `'stereo'`, `'positional'`, or `'discrete'`; `'discrete'` mode lacks a
+     *   `channels` value in `{4, 6, 8}`; or `channels` is passed with a
+     *   non-discrete panner mode.
      */
     constructor(
         audioContext: AudioContext,
@@ -17,7 +23,7 @@ export class AudioPool {
         spriteMap: Record<string, { start: number; duration: number }>,
         capacity?: number,
         output?: AudioNode | null,
-        options?: { panner?: 'stereo' | 'positional' }
+        options?: { panner?: 'stereo' | 'positional' | 'discrete'; channels?: 4 | 6 | 8 }
     );
 
     /**
@@ -49,11 +55,14 @@ export class AudioPool {
     /**
      * The per-voice spatial node for a live handle, else `null`. In
      * `'positional'` mode this is a `PannerNode` (write `.positionX/Y/Z` on it
-     * to set full 3D position); in `'stereo'` mode a `StereoPannerNode`.
-     * Generation-checked and fail-closed: a stolen, stopped, expired, or bogus
-     * handle returns `null`, never a stale node.
+     * to set full 3D position); in `'stereo'` mode a `StereoPannerNode`; in
+     * `'discrete'` mode the per-voice array of lane `GainNode`s (write
+     * `.gain.value` on lane `k` to place the voice; the array is pre-allocated,
+     * so the call allocates nothing). Generation-checked and fail-closed: a
+     * stolen, stopped, expired, or bogus handle returns `null`, never a stale
+     * node.
      */
-    voiceNode(handle: number): PannerNode | StereoPannerNode | null;
+    voiceNode(handle: number): PannerNode | StereoPannerNode | GainNode[] | null;
 
     /**
      * Voices currently sounding. Allocation-free; safe to call every frame.

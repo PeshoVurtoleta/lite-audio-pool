@@ -40,9 +40,44 @@ function makeMockCtx() {
             positionX: staticPosParam, positionY: staticPosParam, positionZ: staticPosParam,
             connect: noop, disconnect: noop,
         }),
+        createChannelMerger: (n) => ({ numberOfInputs: n, connect: noop, disconnect: noop }),
+        createBiquadFilter: () => ({ type: '', frequency: staticRateParam, connect: noop, disconnect: noop }),
         createBufferSource: () => ({
             buffer: null, playbackRate: staticRateParam,
             connect: noop, start: noop, stop: noop, onended: null,
+        }),
+    };
+}
+
+// ---------- Census mock: tracks every node until it is disconnected --------
+// Unlike makeMockCtx (which shares static node shapes to hold allocation flat),
+// this context hands out a fresh, tracked node per create* call and removes it
+// from `census.live` only when disconnect() is called. A destroy() that forgets
+// to disconnect any node it built leaves that node in the set - which is exactly
+// the regression the discrete create/destroy tier and its red control assert.
+function makeCensusCtx() {
+    let currentTime = 0;
+    const census = { live: new Set() };
+    function track(shape) {
+        census.live.add(shape);
+        shape.disconnect = () => { census.live.delete(shape); };
+        return shape;
+    }
+    function mkParam() {
+        return { value: 0, cancelScheduledValues: noop, setValueAtTime: noop, linearRampToValueAtTime: noop };
+    }
+    return {
+        census,
+        get currentTime() { return currentTime; },
+        _advance(dt) { currentTime += dt; },
+        _reset() { currentTime = 0; },
+        destination: {},
+        createGain: () => track({ gain: mkParam(), connect: noop }),
+        createChannelMerger: (n) => track({ numberOfInputs: n, connect: noop }),
+        createBiquadFilter: () => track({ type: '', frequency: mkParam(), connect: noop }),
+        createBufferSource: () => ({
+            buffer: null, playbackRate: staticRateParam,
+            connect: noop, start: noop, stop: noop, disconnect: noop, onended: null,
         }),
     };
 }
@@ -95,11 +130,12 @@ function benchThroughput() {
 
 // ---------- Bench 2: allocation per play (requires --expose-gc) -----------
 
-function benchAllocation(mode) {
+function benchAllocation(mode, channels) {
     if (!global.gc) return null;
 
     const ctx = makeMockCtx();
-    const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: mode });
+    const opts = channels ? { panner: mode, channels } : { panner: mode };
+    const pool = new AudioPool(ctx, {}, sprites, 32, null, opts);
 
     // Warm up and settle heap
     for (let i = 0; i < 200_000; i++) {
@@ -168,6 +204,37 @@ function benchCensus() {
     return { N, delta, perCycle: delta / N };
 }
 
+// ---------- Bench 2c: discrete create/destroy census ----------------------
+// Structural proof, not a heap proof: makeCensusCtx tracks every gain/merger/
+// biquad until disconnect() is called, so a destroy() that skips any node it
+// built shows up as census.live.size > 0. 4096 build+destroy cycles must leave
+// the tracker at 0 on every cycle.
+function benchDiscreteCensus() {
+    const N = 4096;
+    let maxLive = 0;
+    for (let i = 0; i < N; i++) {
+        const ctx = makeCensusCtx();
+        const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: 'discrete', channels: 6 });
+        pool.play('laser');
+        pool.play('hit');
+        pool.destroy();
+        if (ctx.census.live.size > maxLive) maxLive = ctx.census.live.size;
+    }
+    return { N, maxLive };
+}
+
+// Red control (Law #6): defeat the merger's disconnect so destroy() cannot
+// remove it from the census. If the census is a real gate, live.size MUST be
+// > 0 here. A census that reports 0 under an injected leak is a dead gate.
+function redControlDiscreteCensus() {
+    const ctx = makeCensusCtx();
+    const pool = new AudioPool(ctx, {}, sprites, 8, null, { panner: 'discrete', channels: 6 });
+    pool.play('laser');
+    pool.merger.disconnect = noop;   // regression injected: merger never leaves the census
+    pool.destroy();
+    return ctx.census.live.size;     // must be >= 1
+}
+
 // ---------- Bench 3: full-saturation steal loop ---------------------------
 
 function benchStealLoop() {
@@ -205,6 +272,7 @@ line('rate',      `${fmt(Math.round(t.rate))} plays/sec`);
 heading('2. Retained allocation per play');
 const a = benchAllocation('stereo');
 const ap = benchAllocation('positional');
+const ad = benchAllocation('discrete', 6);
 if (a) {
     const perPlayStr = (r) => Math.abs(r.perPlay) < 1
         ? `~0 B/play (delta ${fmt(r.delta)} B across ${fmt(r.N)} plays, within GC noise)`
@@ -212,11 +280,12 @@ if (a) {
     line('plays',       fmt(a.N));
     line('stereo',      perPlayStr(a));
     line('positional',  perPlayStr(ap));
+    line('discrete',    perPlayStr(ad));
     line('note',        'the spec requires createBufferSource per play;');
     line('',            'the pool retains 32 source refs at any moment.');
-    // Positional play() must be zero-alloc, same as stereo: both ~0 B/play.
-    if (Math.abs(a.perPlay) >= 1 || Math.abs(ap.perPlay) >= 1) {
-        console.error('  FAIL: play() must be zero-alloc in both modes');
+    // Every mode's play() must be zero-alloc: all three ~0 B/play.
+    if (Math.abs(a.perPlay) >= 1 || Math.abs(ap.perPlay) >= 1 || Math.abs(ad.perPlay) >= 1) {
+        console.error('  FAIL: play() must be zero-alloc in every panner mode');
         process.exitCode = 1;
     }
 } else {
@@ -242,6 +311,25 @@ if (c) {
     }
 } else {
     line('skipped',     're-run with --expose-gc');
+}
+
+heading('2c. Discrete create/destroy census');
+const rc = redControlDiscreteCensus();
+line('red control',  rc >= 1
+    ? `census caught the injected merger leak (live=${rc})`
+    : `DEAD GATE: census missed the injected leak (live=${rc})`);
+if (rc < 1) {
+    console.error('  FAIL: red control did not fire - the census gate is dead');
+    process.exitCode = 1;
+}
+const dc = benchDiscreteCensus();
+line('cycles',       fmt(dc.N));
+line('census delta', dc.maxLive === 0
+    ? `0 (tracker returns to 0 on every build+destroy cycle)`
+    : `${dc.maxLive} nodes left live`);
+if (dc.maxLive !== 0) {
+    console.error('  FAIL: discrete destroy() leaves nodes in the census');
+    process.exitCode = 1;
 }
 
 heading('3. Full-saturation steal loop');
