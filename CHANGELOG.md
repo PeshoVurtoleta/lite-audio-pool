@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.4.0
+
+HRTF panning, opt-in and cold-path only. This is Session S3b of the spatial
+roadmap: the pool gains a `panner: 'hrtf'` voice mode - a positional `PannerNode`
+with the identical distance graph as `'positional'`, but `panningModel='HRTF'`
+instead of `'equalpower'`. No breaking changes; the default (and every prior
+mode) is byte-identical to 1.3.0.
+
+### Added
+
+- **`panner: 'hrtf'` construction mode.** A fourth `panner` mode, a peer of
+  `'positional'`: each voice is a `PannerNode` with the same `distanceModel`
+  `'inverse'` / `refDistance 1` / `maxDistance 10000` / `rolloffFactor 1`
+  distance graph and the same `pan -> .positionX` seam, but its
+  `panningModel` is set to `'HRTF'`. `panningModel` is resolved ONCE at
+  construction into a captured local, so `play()` and `voiceNode()` gained no
+  branch and no new bytes - the only behavioral line changed is the per-voice
+  `panner.panningModel = panningModel` assignment. Reach the `PannerNode` via
+  `voiceNode()` to set full 3D position exactly as in `'positional'`.
+- **Headphones-only note.** `'HRTF'` is binaural spatialization: it images
+  each source at the ears and is intended for headphone listening; over
+  loudspeakers the cues collapse. It also carries a per-voice HRTF convolution
+  CPU cost that `'equalpower'` (`'positional'`) does not - budget it per active
+  voice, not per pool. `'positional'` remains the cheaper equal-power model for
+  the loudspeaker / low-CPU case.
+
+### Fixed
+
+- **Stale panner union in `README.md`.** The `options` row read
+  `{ panner?: 'stereo' | 'positional' }`, missing `'discrete'` (shipped in
+  1.3.0) and now `'hrtf'`. It now lists all four modes and the `channels` field.
+
+### Design decision
+
+- New `DECISIONS.md` records DR-001: HRTF ships as a fourth `panner` enum value
+  rather than a separate `options.panningModel` field, avoiding a second axis
+  and cross-field validation for one concept.
+
+### Guarantee
+
+Default (`'stereo'`), `'positional'`, and `'discrete'` construction remain
+byte-identical to 1.3.0. `'hrtf'` differs from `'positional'` by exactly the
+`panningModel` value. All four modes measure zero-alloc per play, and 4096
+`'hrtf'` build+destroy cycles leave a node census tracker at 0 with every voice
+reporting `panningModel === 'HRTF'` (proven with an asserted red control that
+mis-sets the model).
+
 ## 1.3.0
 
 Discrete surround, opt-in and cold-path only. This is Session S2 of the spatial

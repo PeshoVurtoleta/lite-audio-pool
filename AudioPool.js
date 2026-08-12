@@ -1,7 +1,7 @@
 /** @zakkster/lite-audio-pool - Zero-GC Web Audio Sound Sprite Pool */
 
 // Package version, in lockstep with package.json + llms.txt (three-place sync).
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 /**
  * Handle layout. A handle is one uint32: [ gen : 24 ][ channel : 8 ].
@@ -32,12 +32,15 @@ export class AudioPool {
      * @param {AudioNode|null} [output=null] - Optional destination node (defaults to
      *   ctx.destination). Pass a GainNode to route the pool's voices into a bus.
      * @param {Object} [options={}] - Construction options.
-     * @param {'stereo'|'positional'|'discrete'} [options.panner='stereo'] - Per-voice pan
-     *   node. 'stereo' uses StereoPannerNode (pan -> .pan). 'positional' uses PannerNode
+     * @param {'stereo'|'positional'|'hrtf'|'discrete'} [options.panner='stereo'] - Per-voice
+     *   pan node. 'stereo' uses StereoPannerNode (pan -> .pan). 'positional' uses PannerNode
      *   (pan -> .positionX): listener at origin facing -Z, so +X is right; distanceModel
      *   'inverse' with refDistance 1 keeps every source at distance <= 1 (the whole pan
      *   range, y=z=0) at gain exactly 1 - zero distance attenuation, loudness stays owned
-     *   by the gain node. Full 3D is set later via voiceNode(). 'discrete' routes each
+     *   by the gain node. Full 3D is set later via voiceNode(). 'hrtf' is identical to
+     *   'positional' (same PannerNode + distance graph) but sets panningModel='HRTF' for
+     *   binaural, headphones-only spatialization at a per-voice HRTF convolution CPU cost.
+     *   'discrete' routes each
      *   voice through N pre-allocated GainNode lanes into a shared ChannelMerger(N); the
      *   `pan` arg is INERT in discrete mode (it lands on a detached per-pool sink). Set
      *   per-lane gains via voiceNode() (returns the lane array). Default is byte-identical
@@ -45,7 +48,7 @@ export class AudioPool {
      * @param {4|6|8} [options.channels] - REQUIRED and only valid when panner is 'discrete':
      *   the discrete channel count. 4 = L,R,C,LFE; 6 = L,R,C,LFE,SL,SR; 8 adds SBL,SBR.
      * @throws {RangeError} if capacity does not fit the handle's channel field; panner mode
-     *   is not 'stereo'|'positional'|'discrete'; discrete mode lacks a channels value in
+     *   is not 'stereo'|'positional'|'hrtf'|'discrete'; discrete mode lacks a channels value in
      *   {4,6,8}; or channels is passed with a non-discrete panner mode
      * @throws {TypeError} if a sprite entry is malformed; positional mode is requested
      *   against a context whose PannerNode lacks the positionX AudioParam interface; or
@@ -63,10 +66,10 @@ export class AudioPool {
             );
         }
         const mode = options.panner || 'stereo';
-        if (mode !== 'stereo' && mode !== 'positional' && mode !== 'discrete') {
+        if (mode !== 'stereo' && mode !== 'positional' && mode !== 'hrtf' && mode !== 'discrete') {
             throw new RangeError(
-                'AudioPool: options.panner must be "stereo", "positional", or "discrete", got "' +
-                mode + '".'
+                'AudioPool: options.panner must be "stereo", "positional", "hrtf", or "discrete", ' +
+                'got "' + mode + '".'
             );
         }
         const discrete = mode === 'discrete';
@@ -144,7 +147,8 @@ export class AudioPool {
         this._onEnded = this._onEnded.bind(this);
 
         // Branch ONCE on mode, at cold construction, never in play().
-        const positional = mode === 'positional';
+        const positional = mode === 'positional' || mode === 'hrtf';
+        const panningModel = mode === 'hrtf' ? 'HRTF' : 'equalpower';
         if (discrete) {
             // One merger, one lowpass, one detached pan sink per pool. The lowpass connects
             // exactly once into merger input 3 (the LFE lane); every voice's lane-3 gain
@@ -183,7 +187,7 @@ export class AudioPool {
             let panner, panTarget;
             if (positional) {
                 panner = this.ctx.createPanner();
-                panner.panningModel = 'equalpower';
+                panner.panningModel = panningModel;
                 panner.distanceModel = 'inverse';
                 panner.refDistance = 1;
                 panner.maxDistance = 10000;

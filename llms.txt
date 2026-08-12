@@ -1,7 +1,7 @@
 # @zakkster/lite-audio-pool
-> Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo/positional/discrete-surround pan, bus routing, ABA-safe handles.
+> Zero-GC Web Audio sound sprite pool. Voice stealing with 20ms anti-pop fade, pitch shifting, stereo/positional/HRTF/discrete-surround pan, bus routing, ABA-safe handles.
 
-Version: 1.3.0 (synced with package.json + the VERSION const in AudioPool.js)
+Version: 1.4.0 (synced with package.json + the VERSION const in AudioPool.js)
 
 ## Install
 npm i @zakkster/lite-audio-pool
@@ -32,11 +32,14 @@ new AudioPool(ctx, audioBuffer, spriteMap, capacity?, output?, options?)
 - `spriteMap: Record<string, { start: number, duration: number }>` (required; validated)
 - `capacity?: number` - integer in [1, 256], defaults to 32. Out-of-range throws `RangeError`.
 - `output?: AudioNode | null` - defaults to `ctx.destination`. Pass a GainNode to route into a bus.
-- `options?: { panner?: 'stereo' | 'positional' | 'discrete', channels?: 4 | 6 | 8 }` -
+- `options?: { panner?: 'stereo' | 'positional' | 'hrtf' | 'discrete', channels?: 4 | 6 | 8 }` -
   per-voice pan node. `'stereo'` (default) uses StereoPannerNode, `pan` writes `.pan`.
   `'positional'` uses PannerNode, `pan` writes `.positionX` (listener at origin facing -Z,
   so +X is right; distanceModel 'inverse' with refDistance 1 gives zero distance attenuation
-  across the pan range - loudness stays owned by the gain node). `'discrete'` routes each
+  across the pan range - loudness stays owned by the gain node). `'hrtf'` is identical to
+  `'positional'` (same PannerNode + distance graph) but sets `panningModel='HRTF'` instead of
+  `'equalpower'`: binaural, headphones-only spatialization at a per-voice HRTF convolution CPU
+  cost. `'discrete'` routes each
   voice through N pre-allocated GainNode lanes into a shared `ChannelMerger(N)`; `channels`
   is REQUIRED and must be 4 (L,R,C,LFE), 6 (+SL,SR), or 8 (+SBL,SBR). One shared lowpass
   band-limits the LFE lane (index 3), summed pool-wide. In discrete mode `pan` is INERT (the

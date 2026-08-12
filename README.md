@@ -131,7 +131,7 @@ Creates a pool of pre-wired audio channels.
 | `spriteMap` | `Record<string, { start, duration }>` | -- | Named slices into the buffer |
 | `capacity` | `number` | `32` | Max concurrent voices, integer in `[1, 256]`. Throws `RangeError` if outside that range -- the handle packs the channel index into 8 bits, so 256 is the last slot the mask can address. |
 | `output` | `AudioNode \| null` | `ctx.destination` | Destination node. Pass a `GainNode` to route the pool through a bus. |
-| `options` | `{ panner?: 'stereo' \| 'positional' }` | `{}` | Per-voice pan node. See below. |
+| `options` | `{ panner?: 'stereo' \| 'positional' \| 'hrtf' \| 'discrete', channels?: 4 \| 6 \| 8 }` | `{}` | Per-voice pan node. See below. |
 
 The constructor validates its inputs eagerly. Missing `ctx` or `spriteMap`
 throws `TypeError`. A sprite entry lacking `duration`, or carrying a negative
@@ -146,7 +146,12 @@ where `pan` writes `.positionX` instead: the listener sits at the origin facing
 identical to stereo. With `distanceModel: 'inverse'` and `refDistance: 1` the
 whole pan range sits at distance `<= 1`, so there is zero distance attenuation --
 loudness stays owned by the gain node. Use [`voiceNode(handle)`](#voicenodehandle)
-to reach the `PannerNode` and set full 3D position later. An unknown mode throws
+to reach the `PannerNode` and set full 3D position later. Pass `{ panner: 'hrtf' }`
+for the identical `PannerNode` + distance graph but with `panningModel = 'HRTF'`:
+binaural, headphones-only spatialization at a per-voice HRTF convolution CPU cost
+(`'positional'` stays the cheaper `'equalpower'` model). Pass `{ panner: 'discrete',
+channels: 4 | 6 | 8 }` to fan each voice through pre-allocated per-channel `GainNode`
+lanes into a shared `ChannelMerger` for surround. An unknown mode throws
 `RangeError`; a `PannerNode` lacking the `positionX` AudioParam throws `TypeError`.
 
 ### `play(spriteId, volume?, pan?, pitch?, buffer?)`

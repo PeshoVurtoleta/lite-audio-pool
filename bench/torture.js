@@ -73,6 +73,10 @@ function makeCensusCtx() {
         _reset() { currentTime = 0; },
         destination: {},
         createGain: () => track({ gain: mkParam(), connect: noop }),
+        createPanner: () => track({
+            panningModel: '', distanceModel: '', refDistance: 0, maxDistance: 0, rolloffFactor: 0,
+            positionX: mkParam(), positionY: mkParam(), positionZ: mkParam(), connect: noop,
+        }),
         createChannelMerger: (n) => track({ numberOfInputs: n, connect: noop }),
         createBiquadFilter: () => track({ type: '', frequency: mkParam(), connect: noop }),
         createBufferSource: () => ({
@@ -235,6 +239,48 @@ function redControlDiscreteCensus() {
     return ctx.census.live.size;     // must be >= 1
 }
 
+// ---------- Bench 2d: HRTF create/destroy census + panningModel census -----
+// An 'hrtf' pool is a positional PannerNode graph whose voices carry
+// panningModel='HRTF' instead of 'equalpower'. Two proofs per cycle:
+//   (1) makeCensusCtx tracks every gain/panner until disconnect(), so a
+//       destroy() that skips any node it built shows up as census.live.size>0;
+//   (2) every voice's PannerNode must report panningModel === 'HRTF'.
+// 4096 build+destroy cycles must leave the tracker at 0 and zero mismatches.
+function benchHrtfCensus() {
+    const N = 4096;
+    let maxLive = 0;
+    let modelMismatch = 0;
+    for (let i = 0; i < N; i++) {
+        const ctx = makeCensusCtx();
+        const pool = new AudioPool(ctx, {}, sprites, 32, null, { panner: 'hrtf' });
+        pool.play('laser');
+        pool.play('hit');
+        for (let c = 0; c < pool.capacity; c++) {
+            if (pool.panners[c].panningModel !== 'HRTF') modelMismatch++;
+        }
+        pool.destroy();
+        if (ctx.census.live.size > maxLive) maxLive = ctx.census.live.size;
+    }
+    return { N, maxLive, modelMismatch };
+}
+
+// Red control (Law #6): mis-set the panningModel on a built voice so it no
+// longer reports 'HRTF'. If the "all voices report HRTF" check is a real gate,
+// the mismatch count MUST be > 0 here. A model census that still reports 0
+// under an injected mis-set is a dead gate.
+function redControlHrtfModel() {
+    const ctx = makeCensusCtx();
+    const pool = new AudioPool(ctx, {}, sprites, 8, null, { panner: 'hrtf' });
+    pool.play('laser');
+    pool.panners[0].panningModel = 'equalpower';   // regression: voice 0 no longer HRTF
+    let mismatch = 0;
+    for (let c = 0; c < pool.capacity; c++) {
+        if (pool.panners[c].panningModel !== 'HRTF') mismatch++;
+    }
+    pool.destroy();
+    return mismatch;                                // must be >= 1
+}
+
 // ---------- Bench 3: full-saturation steal loop ---------------------------
 
 function benchStealLoop() {
@@ -272,6 +318,7 @@ line('rate',      `${fmt(Math.round(t.rate))} plays/sec`);
 heading('2. Retained allocation per play');
 const a = benchAllocation('stereo');
 const ap = benchAllocation('positional');
+const ah = benchAllocation('hrtf');
 const ad = benchAllocation('discrete', 6);
 if (a) {
     const perPlayStr = (r) => Math.abs(r.perPlay) < 1
@@ -280,11 +327,13 @@ if (a) {
     line('plays',       fmt(a.N));
     line('stereo',      perPlayStr(a));
     line('positional',  perPlayStr(ap));
+    line('hrtf',        perPlayStr(ah));
     line('discrete',    perPlayStr(ad));
     line('note',        'the spec requires createBufferSource per play;');
     line('',            'the pool retains 32 source refs at any moment.');
-    // Every mode's play() must be zero-alloc: all three ~0 B/play.
-    if (Math.abs(a.perPlay) >= 1 || Math.abs(ap.perPlay) >= 1 || Math.abs(ad.perPlay) >= 1) {
+    // Every mode's play() must be zero-alloc: all four ~0 B/play.
+    if (Math.abs(a.perPlay) >= 1 || Math.abs(ap.perPlay) >= 1 || Math.abs(ah.perPlay) >= 1 ||
+        Math.abs(ad.perPlay) >= 1) {
         console.error('  FAIL: play() must be zero-alloc in every panner mode');
         process.exitCode = 1;
     }
@@ -329,6 +378,32 @@ line('census delta', dc.maxLive === 0
     : `${dc.maxLive} nodes left live`);
 if (dc.maxLive !== 0) {
     console.error('  FAIL: discrete destroy() leaves nodes in the census');
+    process.exitCode = 1;
+}
+
+heading('2d. HRTF panningModel + create/destroy census');
+const rh = redControlHrtfModel();
+line('red control',  rh >= 1
+    ? `model census caught the injected mis-set (mismatch=${rh})`
+    : `DEAD GATE: model census missed the injected mis-set (mismatch=${rh})`);
+if (rh < 1) {
+    console.error('  FAIL: red control did not fire - the HRTF model gate is dead');
+    process.exitCode = 1;
+}
+const hc = benchHrtfCensus();
+line('cycles',       fmt(hc.N));
+line('panningModel', hc.modelMismatch === 0
+    ? `every voice reports HRTF across all ${fmt(hc.N)} cycles`
+    : `${hc.modelMismatch} voices did NOT report HRTF`);
+if (hc.modelMismatch !== 0) {
+    console.error('  FAIL: an hrtf pool built a voice that is not panningModel HRTF');
+    process.exitCode = 1;
+}
+line('census delta', hc.maxLive === 0
+    ? `0 (tracker returns to 0 on every build+destroy cycle)`
+    : `${hc.maxLive} nodes left live`);
+if (hc.maxLive !== 0) {
+    console.error('  FAIL: hrtf destroy() leaves nodes in the census');
     process.exitCode = 1;
 }
 

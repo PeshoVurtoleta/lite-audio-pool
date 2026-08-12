@@ -801,4 +801,93 @@ test('hot play() body never branches on panner mode (structural pin against regr
     assert.doesNotMatch(body, /discrete/i, 'play() must not reference "discrete" anywhere in its body');
     assert.doesNotMatch(body, /panMode/, 'play() must not read this.panMode');
     assert.doesNotMatch(body, /voiceLanes/, 'play() must not touch voiceLanes; it uses pre-resolved voiceInputs');
+    // 1.4.0 hrtf: /panMode/ alone would NOT catch a regression that branches on the
+    // resolved panningModel value or the literal 'hrtf' string instead of panMode -
+    // e.g. `if (this.panners[i].panningModel === 'HRTF')` inside play(). Pin those
+    // two substrings directly so that class of regression fails loudly here too.
+    assert.doesNotMatch(body, /panningModel/, 'play() must not reference panningModel');
+    assert.doesNotMatch(body, /hrtf/i, 'play() must not reference "hrtf" anywhere in its body');
+});
+
+// ---- 1.4.0 hrtf panner mode -------------------------------------------------
+
+test('hrtf mode builds capacity PannerNodes, panningModel HRTF, distance graph identical ' +
+     'to positional, panMode is hrtf, and never builds a StereoPannerNode', () => {
+    const ctx = mkCtx();
+    let stereoPannerCalls = 0;
+    const origStereo = ctx.createStereoPanner;
+    ctx.createStereoPanner = (...a) => { stereoPannerCalls++; return origStereo(...a); };
+
+    const p = new AudioPool(ctx, {}, MAP, 32, ctx.destination, { panner: 'hrtf' });
+    assert.equal(p.panMode, 'hrtf');
+    for (let i = 0; i < 32; i++) {
+        assert.equal(p.panners[i].kind, 'panner3d', 'voice ' + i + ' is a PannerNode');
+        assert.equal(p.panners[i].panningModel, 'HRTF', 'voice ' + i + ' reports HRTF');
+        assert.equal(p.panners[i].distanceModel, 'inverse', 'voice ' + i + ' distanceModel matches positional');
+        assert.equal(p.panners[i].refDistance, 1, 'voice ' + i + ' refDistance matches positional');
+        assert.equal(p.panners[i].maxDistance, 10000, 'voice ' + i + ' maxDistance matches positional');
+        assert.equal(p.panners[i].rolloffFactor, 1, 'voice ' + i + ' rolloffFactor matches positional');
+        assert.equal(p.panTargets[i], p.panners[i].positionX, 'voice ' + i + ' pan target is positionX');
+    }
+    assert.equal(stereoPannerCalls, 0, 'hrtf mode never builds a StereoPannerNode');
+});
+
+test('stereo mode never builds a 3D PannerNode (0 createPanner calls)', () => {
+    // DONE-WHEN 2's other half: {panner:'positional'} reporting 'equalpower' is
+    // already pinned at "positional mode builds capacity PannerNodes..." above;
+    // this is the missing stereo-side node-census proof.
+    const ctx = mkCtx();
+    let pannerCalls = 0;
+    const origPanner = ctx.createPanner;
+    ctx.createPanner = (...a) => { pannerCalls++; return origPanner(...a); };
+
+    const p = new AudioPool(ctx, {}, MAP, 32);
+    assert.equal(p.panMode, 'stereo');
+    assert.equal(pannerCalls, 0, 'stereo mode never calls createPanner');
+});
+
+test('hrtf mode against a PannerNode without positionX throws TypeError, exactly like positional', () => {
+    // Adversarial case not called out by name in the DONE-WHEN: prove the shared
+    // `positional = mode === 'positional' || mode === 'hrtf'` branch really shares
+    // the fail-closed guard, not just the happy-path fields asserted above.
+    const ctx = mkCtx();
+    ctx.createPanner = () => pannerNode(false);   // pre-AudioParam node
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'hrtf' }), TypeError);
+});
+
+test('{panner:"hrft"} (typo) throws RangeError with did-you-mean guidance including "hrtf"; ' +
+     '{panner:"HRTF"} (wrong case) throws; {panner:"hrtf", channels:6} throws', () => {
+    const ctx = mkCtx();
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 32, null, { panner: 'hrft' }), RangeError);
+    let typoMessage = '';
+    try {
+        new AudioPool(ctx, {}, MAP, 32, null, { panner: 'hrft' });
+    } catch (e) {
+        typoMessage = e.message;
+    }
+    assert.match(typoMessage, /hrtf/, 'error message must guide toward the valid "hrtf" spelling');
+
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 32, null, { panner: 'HRTF' }), RangeError,
+        'wrong-case "HRTF" must not silently alias to "hrtf"');
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 32, null, { panner: 'hrtf', channels: 6 }), RangeError,
+        'channels is only valid with panner "discrete", including against hrtf');
+});
+
+test('destroy() disconnects every PannerNode in hrtf mode and clears panTargets ' +
+     '(null-safe loop covers the HRTF PannerNode)', () => {
+    // Same mock/census approach as the existing positional destroy test: a
+    // disconnect() counter per node, asserted post-destroy(), plus idempotency.
+    const ctx = mkCtx();
+    const p = new AudioPool(ctx, {}, MAP, 3, null, { panner: 'hrtf' });
+    p.play('drone');
+    const gains = p.gains.slice();
+    const panners = p.panners.slice();
+    for (const panner of panners) assert.equal(panner.panningModel, 'HRTF', 'sanity: hrtf voice before destroy');
+    p.destroy();
+    for (let i = 0; i < 3; i++) {
+        assert.equal(gains[i].disconnected, 1, 'gain ' + i);
+        assert.equal(panners[i].disconnected, 1, 'hrtf panner ' + i + ' disconnected');
+    }
+    assert.equal(p.panTargets, null, 'panTargets (AudioParam refs) released after destroy');
+    assert.doesNotThrow(() => p.destroy(), 'duplicate dispose is a no-op');
 });

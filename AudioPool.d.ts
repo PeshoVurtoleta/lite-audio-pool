@@ -13,9 +13,9 @@ export class AudioPool {
      * @throws {RangeError} if capacity is not an integer in [1, 256] (the
      *   channel index is packed into 8 bits of the returned handle, so 256 is
      *   the last slot the mask can address); `options.panner` is not
-     *   `'stereo'`, `'positional'`, or `'discrete'`; `'discrete'` mode lacks a
-     *   `channels` value in `{4, 6, 8}`; or `channels` is passed with a
-     *   non-discrete panner mode.
+     *   `'stereo'`, `'positional'`, `'hrtf'`, or `'discrete'`; `'discrete'`
+     *   mode lacks a `channels` value in `{4, 6, 8}`; or `channels` is passed
+     *   with a non-discrete panner mode.
      */
     constructor(
         audioContext: AudioContext,
@@ -23,7 +23,7 @@ export class AudioPool {
         spriteMap: Record<string, { start: number; duration: number }>,
         capacity?: number,
         output?: AudioNode | null,
-        options?: { panner?: 'stereo' | 'positional' | 'discrete'; channels?: 4 | 6 | 8 }
+        options?: { panner?: 'stereo' | 'positional' | 'hrtf' | 'discrete'; channels?: 4 | 6 | 8 }
     );
 
     /**
