@@ -891,3 +891,122 @@ test('destroy() disconnects every PannerNode in hrtf mode and clears panTargets 
     assert.equal(p.panTargets, null, 'panTargets (AudioParam refs) released after destroy');
     assert.doesNotThrow(() => p.destroy(), 'duplicate dispose is a no-op');
 });
+
+// ---- 1.4.0 hardening: cross matrix (mode x capacity/channels) + fail-closed ctx ----
+
+test('cross matrix: stereo/positional/hrtf construct at capacity {1,32,256} with a live voiceNode', () => {
+    for (const mode of ['stereo', 'positional', 'hrtf']) {
+        for (const cap of [1, 32, 256]) {
+            const ctx = mkCtx();
+            const p = mode === 'stereo'
+                ? new AudioPool(ctx, {}, MAP, cap)
+                : new AudioPool(ctx, {}, MAP, cap, null, { panner: mode });
+            assert.equal(p.panMode, mode, mode + ' cap ' + cap + ' panMode');
+            assert.equal(p.panners.length, cap, mode + ' cap ' + cap + ' panners sized to capacity');
+            const h = p.play('drone');
+            assert.equal(p.voiceNode(h), p.panners[0], mode + ' cap ' + cap + ' voiceNode resolves live voice');
+            p.destroy();
+        }
+    }
+});
+
+test('cross matrix: discrete constructs at every channel count {4,6,8} across capacity {1,32,256}', () => {
+    for (const N of [4, 6, 8]) {
+        for (const cap of [1, 32, 256]) {
+            const ctx = mkCtx();
+            const p = new AudioPool(ctx, {}, MAP, cap, null, { panner: 'discrete', channels: N });
+            assert.equal(p.channels, N, 'N=' + N + ' cap=' + cap + ' channel count');
+            assert.equal(p.voiceLanes.length, cap, 'N=' + N + ' cap=' + cap + ' voiceLanes sized to capacity');
+            const h = p.play('drone');
+            const lanes = p.voiceNode(h);
+            assert.equal(lanes, p.voiceLanes[0], 'N=' + N + ' cap=' + cap + ' voiceNode yields lane array');
+            assert.equal(lanes.length, N, 'N=' + N + ' cap=' + cap + ' lane count');
+            p.destroy();
+        }
+    }
+});
+
+test('cross matrix: pan-target wiring holds at the capacity 1 and 256 boundaries in every non-discrete mode', () => {
+    for (const cap of [1, 256]) {
+        const cs = mkCtx();
+        const s = new AudioPool(cs, {}, MAP, cap);
+        for (let i = 0; i < cap; i++) assert.equal(s.panTargets[i], s.panners[i].pan, 'stereo cap ' + cap + ' voice ' + i);
+        for (const mode of ['positional', 'hrtf']) {
+            const c = mkCtx();
+            const p = new AudioPool(c, {}, MAP, cap, null, { panner: mode });
+            for (let i = 0; i < cap; i++) {
+                assert.equal(p.panTargets[i], p.panners[i].positionX, mode + ' cap ' + cap + ' voice ' + i);
+            }
+        }
+    }
+});
+
+test('cross matrix: voiceNode fails closed on a stale post-steal handle in every panner mode', () => {
+    for (const opts of [null, { panner: 'positional' }, { panner: 'hrtf' }, { panner: 'discrete', channels: 6 }]) {
+        const ctx = mkCtx();
+        const p = opts ? new AudioPool(ctx, {}, MAP, 1, null, opts) : new AudioPool(ctx, {}, MAP, 1);
+        const h0 = p.play('drone');
+        ctx.currentTime = 0.5;
+        const h1 = p.play('drone');            // steals ch0, bumps gen
+        assert.equal(p.voiceNode(h0), null, p.panMode + ' stale handle after steal is null');
+        assert.notEqual(p.voiceNode(h1), null, p.panMode + ' new occupant is live');
+        p.destroy();
+    }
+});
+
+test('fail closed: positional against a context with NO createPanner throws with a useful message', () => {
+    const ctx = mkCtx();
+    delete ctx.createPanner;
+    let msg = '';
+    assert.throws(
+        () => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'positional' }),
+        (e) => { msg = e.message; return e instanceof TypeError; }
+    );
+    assert.match(msg, /createPanner/, 'message names the missing createPanner factory');
+});
+
+test('fail closed: hrtf against a context with NO createPanner throws, exactly like positional', () => {
+    const ctx = mkCtx();
+    delete ctx.createPanner;
+    assert.throws(() => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'hrtf' }), TypeError);
+});
+
+test('RC-FAILOPEN-POSX: positional/hrtf against a PannerNode lacking positionX throw TypeError naming positionX', () => {
+    // Red control for the fail-open-on-positionX concern: a pre-AudioParam
+    // PannerNode (no positionX) must not silently swallow every pan write. The
+    // guard must fire with a message that names positionX so the failure is
+    // diagnosable, in BOTH positional and hrtf mode (they share the guard branch).
+    for (const mode of ['positional', 'hrtf']) {
+        const ctx = mkCtx();
+        ctx.createPanner = () => pannerNode(false);   // pre-AudioParam node: no positionX/Y/Z
+        let msg = '';
+        assert.throws(
+            () => new AudioPool(ctx, {}, MAP, 4, null, { panner: mode }),
+            (e) => { msg = e.message; return e instanceof TypeError; },
+            mode + ' must throw TypeError'
+        );
+        assert.match(msg, /positionX/, mode + ' message must name positionX');
+    }
+});
+
+test('fail closed: discrete against a context missing createChannelMerger throws TypeError with a useful message', () => {
+    const ctx = mkCtx();
+    delete ctx.createChannelMerger;
+    let msg = '';
+    assert.throws(
+        () => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6 }),
+        (e) => { msg = e.message; return e instanceof TypeError; }
+    );
+    assert.match(msg, /createChannelMerger/, 'message names the missing surround factory');
+});
+
+test('fail closed: discrete against a context missing createBiquadFilter throws TypeError with a useful message', () => {
+    const ctx = mkCtx();
+    delete ctx.createBiquadFilter;
+    let msg = '';
+    assert.throws(
+        () => new AudioPool(ctx, {}, MAP, 4, null, { panner: 'discrete', channels: 6 }),
+        (e) => { msg = e.message; return e instanceof TypeError; }
+    );
+    assert.match(msg, /createBiquadFilter/, 'message names the missing LFE lowpass factory');
+});

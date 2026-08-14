@@ -694,6 +694,41 @@
         <button id="fire">FIRE / hold to repeat</button>
         <p class="note">Jitter adds +/-0.5 pan and +/-15% pitch per play, so a 20/s stream never sounds like a loop. The
             pool sees identical calls either way.</p>
+        <div class="row" id="modes">
+            <span class="lbl">panner</span>
+            <button data-mode="stereo" class="on" aria-pressed="true">stereo</button>
+            <button data-mode="positional" aria-pressed="false">positional</button>
+            <button data-mode="hrtf" aria-pressed="false">hrtf</button>
+            <button data-mode="discrete" aria-pressed="false">discrete</button>
+        </div>
+        <div class="row" id="mode-ch" hidden>
+            <span class="lbl">channels</span>
+            <button data-ch="4" aria-pressed="false">4</button>
+            <button data-ch="6" class="on" aria-pressed="true">6</button>
+            <button data-ch="8" aria-pressed="false">8</button>
+        </div>
+        <div class="row">
+            <button id="b-hold-voice">play sustained voice (drone)</button>
+        </div>
+        <div class="slider">
+            <label for="s-vx" id="l-vx">voice pan</label>
+            <input id="s-vx" type="range" min="-100" max="100" value="0"/>
+            <output id="o-vx">0.00</output>
+        </div>
+        <div class="slider">
+            <label for="s-vy" id="l-vy">voice Y</label>
+            <input id="s-vy" type="range" min="-100" max="100" value="0"/>
+            <output id="o-vy">0.00</output>
+        </div>
+        <div class="slider">
+            <label for="s-vz" id="l-vz">voice Z</label>
+            <input id="s-vz" type="range" min="-100" max="100" value="0"/>
+            <output id="o-vz">0.00</output>
+        </div>
+        <p class="note">The panner buttons destroy() the main pool and rebuild it in that mode (stereo, positional, hrtf,
+            or discrete + channels). The voice sliders write live through pool.voiceNode(handle): positionX/Y/Z on a
+            PannerNode, .pan on a StereoPannerNode, or the front lane gains in discrete mode. A stale or expired handle
+            returns null and the write is skipped - fail closed.</p>
     </section>
 
     <section id="p-telem" class="panel">
@@ -999,6 +1034,20 @@
     const $bJitter = document.getElementById('b-jitter');
     const $bStopAll = document.getElementById('b-stopall');
     const $fire = document.getElementById('fire');
+
+    const $modeBtns = document.querySelectorAll('#modes [data-mode]');
+    const $modeChBtns = document.querySelectorAll('#mode-ch [data-ch]');
+    const $modeCh = document.getElementById('mode-ch');
+    const $bHoldVoice = document.getElementById('b-hold-voice');
+    const $sVx = document.getElementById('s-vx');
+    const $sVy = document.getElementById('s-vy');
+    const $sVz = document.getElementById('s-vz');
+    const $oVx = document.getElementById('o-vx');
+    const $oVy = document.getElementById('o-vy');
+    const $oVz = document.getElementById('o-vz');
+    const $lVx = document.getElementById('l-vx');
+    const $lVy = document.getElementById('l-vy');
+    const $lVz = document.getElementById('l-vz');
 
     const $tPlays = document.getElementById('t-plays');
     const $tActive = document.getElementById('t-active');
@@ -1543,6 +1592,12 @@
     let limitOn = 1, muted = 0, masterVol = 0.55;
     let stealCap = 4;
 
+    // Main-pool panner mode (rebuild-on-change) + the sustained voice its sliders drive.
+    let mainMode = 'stereo';
+    let mainCh = 6;
+    let mainVoiceHandle = -1;
+    let vx = 0, vy = 0, vz = 0;
+
     let plays = 0, steals = 0;
     let playsWin = 0, stealsWin = 0;
     let rateShown = 0, ppsShown = 0, spsShown = 0;
@@ -1639,7 +1694,7 @@
         mL = new Uint8Array(anL.fftSize);
         mR = new Uint8Array(anR.fftSize);
 
-        viewMain.pool = new AudioPool(ctx, atlas, SPRITE_MAP, CAP_MAIN, poolBus);
+        buildMainPool();
         buildStealPool();
 
         $ctxSr.textContent = (ctx.sampleRate / 1000).toFixed(1) + 'k';
@@ -1650,6 +1705,65 @@
         lastTs = performance.now();
         winStart = lastTs;
         requestAnimationFrame(frame);
+    }
+
+    // Destroy the main pool and rebuild it in the selected panner mode. CAP_MAIN
+    // is unchanged; only the per-voice pan topology differs (stereo/positional/
+    // hrtf/discrete + channels). Every other scene talks to viewMain.pool through
+    // play()/expireTimes/capacity/destroy, all mode-agnostic, so the swap is safe.
+    function buildMainPool() {
+        if (viewMain.pool) viewMain.pool.destroy();
+        const opts = mainMode === 'discrete'
+            ? { panner: 'discrete', channels: mainCh }
+            : { panner: mainMode };
+        viewMain.pool = new AudioPool(ctx, atlas, SPRITE_MAP, CAP_MAIN, poolBus, opts);
+        mainVoiceHandle = -1;
+        updateVoiceLabels();
+    }
+
+    // Relabel the voice sliders for the active mode and reveal the channels row
+    // only in discrete mode. Pure UI text: no per-frame cost.
+    function updateVoiceLabels() {
+        if (mainMode === 'stereo') {
+            $lVx.textContent = 'voice pan';
+            $lVy.textContent = 'voice Y (n/a)';
+            $lVz.textContent = 'voice Z (n/a)';
+        } else if (mainMode === 'discrete') {
+            $lVx.textContent = 'lane L<->R';
+            $lVy.textContent = 'lane C';
+            $lVz.textContent = 'lane (n/a)';
+        } else {
+            $lVx.textContent = 'voice X';
+            $lVy.textContent = 'voice Y';
+            $lVz.textContent = 'voice Z';
+        }
+        $modeCh.hidden = mainMode !== 'discrete';
+    }
+
+    // Write live per-voice state through the pool's public voiceNode() seam. A
+    // stolen, stopped, or expired handle returns null and the write is skipped -
+    // the pool fails closed, the demo never reaches into a stale node.
+    function applyVoiceControl() {
+        const pool = viewMain.pool;
+        if (!pool || mainVoiceHandle < 0) return;
+        const node = pool.voiceNode(mainVoiceHandle);
+        if (!node) return;
+        if (Array.isArray(node)) {
+            // discrete: the lane GainNode array. Slider vx pans L<->R across the
+            // front pair, vy lifts the center lane. [-1,1] -> [0,1] gain.
+            node[0].gain.value = (1 - vx) * 0.5;
+            node[1].gain.value = (1 + vx) * 0.5;
+            if (node.length > 2) node[2].gain.value = (vy + 1) * 0.5;
+            return;
+        }
+        if (node.positionX) {
+            // positional / hrtf: a PannerNode. Place the source in 3D.
+            node.positionX.value = vx;
+            node.positionY.value = vy;
+            node.positionZ.value = vz;
+            return;
+        }
+        if (node.pan) node.pan.value = vx;   // stereo: a StereoPannerNode
     }
 
     function buildStealPool() {
@@ -2382,6 +2496,63 @@
             applyRoute();
             logPush(EV_SYS, 0, 0, ctx.currentTime, 3);
         });
+    });
+
+    $modeBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+            if (!running) return;
+            const m = b.dataset.mode;
+            if (m === mainMode) return;
+            mainMode = m;
+            for (let i = 0; i < $modeBtns.length; i++) {
+                const on = $modeBtns[i].dataset.mode === m;
+                $modeBtns[i].classList.toggle('on', on);
+                $modeBtns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            buildMainPool();
+            logPush(EV_SYS, 0, 0, ctx.currentTime, 2);
+        });
+    });
+
+    $modeChBtns.forEach((b) => {
+        b.addEventListener('click', () => {
+            if (!running) return;
+            const ch = b.dataset.ch | 0;
+            if (ch === mainCh) return;
+            mainCh = ch;
+            for (let i = 0; i < $modeChBtns.length; i++) {
+                const on = ($modeChBtns[i].dataset.ch | 0) === ch;
+                $modeChBtns[i].classList.toggle('on', on);
+                $modeChBtns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+            if (mainMode === 'discrete') {
+                buildMainPool();
+                logPush(EV_SYS, 0, 0, ctx.currentTime, 2);
+            }
+        });
+    });
+
+    $bHoldVoice.addEventListener('click', () => {
+        if (!running) return;
+        const h = fireInto(viewMain, IDX_DRONE, volume, panBase, 1.0);
+        if (h >= 0) mainVoiceHandle = h;
+        applyVoiceControl();
+    });
+
+    $sVx.addEventListener('input', () => {
+        vx = ($sVx.value | 0) / 100;
+        $oVx.textContent = vx.toFixed(2);
+        applyVoiceControl();
+    });
+    $sVy.addEventListener('input', () => {
+        vy = ($sVy.value | 0) / 100;
+        $oVy.textContent = vy.toFixed(2);
+        applyVoiceControl();
+    });
+    $sVz.addEventListener('input', () => {
+        vz = ($sVz.value | 0) / 100;
+        $oVz.textContent = vz.toFixed(2);
+        applyVoiceControl();
     });
 
     $sVol.addEventListener('input', () => {
